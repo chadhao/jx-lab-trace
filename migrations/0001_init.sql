@@ -11,6 +11,10 @@
 --
 --  ★ 命名约定：m_ 主数据 · b_ 业务 · s_ 系统
 --  ★ 每个业务表都带 created_at / created_by；主数据另带版本链与 external_id
+--  ★ P1 的机械保证：**带版本链的表，其业务键唯一索引必须含 `version`**
+--    （「改 = 作废 + 新增」要允许同一业务键多行并存）。
+--    判例：`uk_limit_scope (test_item_id, customer_id, material_id, version)`。
+--    反例（2026-10-09 已修，COLLAB `N-009`）：6 张主数据表曾漏 `version` ⇒ 第二版本必然 1062。
 -- ============================================================================
 
 SET NAMES utf8mb4;
@@ -38,7 +42,7 @@ CREATE TABLE m_customer (
   created_at    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   created_by    VARCHAR(64)     NOT NULL DEFAULT '',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_customer_code (code),
+  UNIQUE KEY uk_customer_code (code, version),
   KEY idx_customer_current (is_current, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='客户档案（独立模块，后台增删改查）';
 
@@ -56,7 +60,7 @@ CREATE TABLE m_composition (
   created_at    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   created_by    VARCHAR(64)     NOT NULL DEFAULT '',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_composition_code (code)
+  UNIQUE KEY uk_composition_code (code, version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='原料组成字典';
 
 CREATE TABLE m_material_type (
@@ -73,7 +77,7 @@ CREATE TABLE m_material_type (
   created_at    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   created_by    VARCHAR(64)     NOT NULL DEFAULT '',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_mtype_code (code)
+  UNIQUE KEY uk_mtype_code (code, version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='原料类型字典';
 
 CREATE TABLE m_material (
@@ -95,7 +99,7 @@ CREATE TABLE m_material (
   created_at      DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   created_by      VARCHAR(64)     NOT NULL DEFAULT '',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_material_code (code),
+  UNIQUE KEY uk_material_code (code, version),
   KEY idx_material_kind (kind, is_current)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='物料档案（原料/成品统一建模）';
 
@@ -119,7 +123,7 @@ CREATE TABLE m_test_item (
   created_at    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   created_by    VARCHAR(64)     NOT NULL DEFAULT '',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_test_item_code (code)
+  UNIQUE KEY uk_test_item_code (code, version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='检测项目字典（后台可维护的系统常量）';
 
 -- ★ 判定限按「客户 × 物料」维度配置，不是一张全局表
@@ -160,7 +164,7 @@ CREATE TABLE m_vehicle (
   created_at    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   created_by    VARCHAR(64)     NOT NULL DEFAULT '',
   PRIMARY KEY (id),
-  UNIQUE KEY uk_vehicle_plate (plate_no)
+  UNIQUE KEY uk_vehicle_plate (plate_no, version)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='车辆档案（主数据，长期存在）';
 
 -- ★ 人员与班组不适用「版本链」语义（来去不是版本），故不带 version/supersedes
