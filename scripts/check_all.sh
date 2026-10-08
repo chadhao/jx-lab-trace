@@ -101,6 +101,10 @@ green       "权限点规格自校验"         "$PY" spec/verify_permission_poin
 echo
 echo "[会报既存问题]（不阻塞）"
 report      "md 结构与一致性门禁"      "$PY" scripts/check_md_structure.py
+# ★ 2026-10-09 用户硬约束：**系统调试只在测试服务器上进行，不在本机进行**（docs/05）。
+#   本项为「会报」级：本机是否在跑进程是**环境事实**而非代码事实，用必绿卡它会把
+#   「别人本机状态」变成阻断提交的理由；但**不许静默** ⇒ 一旦发现就明确列出来提醒人处置。
+report      "本机调试残留提醒"          "$PY" scripts/check_local_debug.py
 
 echo
 echo "===== 汇总（本次跑了 $((${#SUMMARY[@]})) 项，总耗时 $(_elapsed "$T_ALL") ms）====="

@@ -17,6 +17,11 @@
 5. `docs/04-模块设计与用例.md`（本批模块的 **UC 与 TC**，这是你的验收标准）
 6. `spec/README.md` + `spec/code-rules.json` + `spec/permission-points.json` + `spec/schema.sql`（**机读契约，冲突时以此为准**）
 7. 你的当前任务包 `MIMO-NEXT-BATCH-01.md`
+8. **`docs/05-环境与调试约定.md`** —— ★★ **硬约束：系统调试一律在测试服务器上进行，不在本机进行。**
+   - ❌ 本机**不得**：跑服务（起监听）、连库做迁移/联调、起临时 MySQL、建隧道、重启服务验"会话跨重启"；
+   - ✅ 本机**可以**：`go build`（只编译）、`go test`（**纯单测，不得依赖外部服务**）、`gofmt`/`go vet`、门禁、只读探针；
+   - ✅ 运行与联调走 `bash scripts/deploy-test-server.sh --restart --smoke`（**在服务器上**起服务）。
+   - ★ **判据**：**要 listen 或要改远端状态的，去服务器；只读、只编译、只静态检查的，留本机。**
 
 ## 第二步：责任域（决定"谁说了算"）
 
