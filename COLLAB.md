@@ -481,6 +481,65 @@
 **判定（对照取证）**：该轮驱动以**普通方式**启动，随心跳 turn 结束被回收；对照上一轮 `N-001` 驱动以**后台任务**（id `UhlQkC`）启动 ⇒ **存活 2h 并正常完成**。⇒ **派工必须以【后台任务】方式发起**（本轮已记录为派工纪律）。
 **处置**：本轮改用**后台任务方式**重派**同一议题 `N-007`**，任务包 `MIMO-NEXT-BATCH-02.md` **不变**、口径**不变**；四条派工前置经复测仍齐（门禁 **11/11 绿** · `N-001` = `AGREED` · `docs/04` 的 M1/M2 用例齐备 · 任务包就绪）。
 
+**★★ mimo 回执 · 2026-10-09 06:38 · 批 2 交付（D1–D8 全落位）；★ 因 `N-009` 未解除，A3 / A11 尚差 2 条 TC，故本轮**不改 `MIMO-DONE`**
+
+**① 交付物 D1–D8**
+
+| 交付 | 实现位置 | 要点 |
+|---|---|---|
+| D1 版本链共用机制 | `internal/store/masterdata.go`（`MDCreate` / `MDUpdate` / `MDHistory`） | 一处实现、8 处复用：改 = 作废（`is_current=0`＋`valid_to=now`）+ INSERT（`version+1` / `is_current=1` / `supersedes_id=原行` / `valid_from=now`）；**只存前向指针**（N-006），反向由 `WHERE supersedes_id=?` 反查；同一事务内完成「失效＋新版本＋审计」，`SELECT ... FOR UPDATE` 串行化同 row 的并发改写；`reason` 必填并落审计。**边界**：能保证三者同生共死与业务键唯一；**不能**替 spec 修 `UNIQUE(code)`（见 `N-009`），也不覆盖绕过本层的直连库写入 |
+| D2 8 类主数据 CRUD | `masterdata.go` 实体注册表 + `internal/httpapi/md.go` + `server.go` 路由 | 8 类 × 6 条路由（列表/新增/单行/版本链/修改/停启用）；可写列白名单 + `Required`/`Validate`（客户与物料 `code` 4 位数字、`kind` ∈ 原料/成品、`value_type` ∈ 数值/文本/枚举…）；读写分守卫（读 `LevelRead`、写 `LevelAll`）；`m_team` 豁免版本链；**停用不删除**、状态原地流转不造新版本 |
+| D3 判定限解析 | `internal/store/limits.go` + `GET /api/limits/resolve` | ★ 优先级是**纯函数**（`LimitRank` / `ResolveLimit`）⇒ **不连库即可单测**；顺序 = 精确 → `(客,0)` → `(0,物)` → 通用，取第一条命中；接口回 `rank` 让「最具体优先」可观测 |
+| D4 权限矩阵 | `internal/store/permadmin.go` + `httpapi/admin.go` + `web/src/components/PermissionAdmin.vue` | 51 点 × 6 角色、按模块分组可折叠、格子下拉（级别集取自 `levels`）；**先整体校验后落库** ⇒ 中途非法 ⇒ 一笔不写；保存前回每角色**受影响账号数** |
+| D5 角色 + 用户绑定 | 同上 | 新增/重命名/停用/「从某角色复制权限」（复制后各自独立）；**内置角色不可删除**；`UNIQUE(open_id, role_code)` 撞车 ⇒ 409「已被占用」；多角色并集 |
+| D6 防锁死（三条一起） | `permadmin.go` | ① 前端按 `locked` 置灰；② ★★ 后端 `IsLockedCell` ⇒ **403**（绕过前端直接调接口一样被拒）；③ 解绑最后一个管理员 / 停用 `sysadmin` 角色 ⇒ 拒绝；`JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID` 引导兜底沿用迁移 ⑤。**未给 sysadmin 开任何业务点**（种子业务点仍全 NONE） |
+| D7 审计 | `internal/store/audit.go` 新增 `appendAuditTx` | **同事务**写入：权限改动逐条 `perm_change`（`role × point` / 旧级 → 新级 / actor / reason）；主数据 `create` / `supersede`（含变更字段与前后值）/ `status` 均带 `reason` |
+| D8 前端 + 门禁 | `web/src/{App.vue,components/*,api.js}` | 主数据页（8 类切换 + 新增/修改/停启用/版本链历史）＋ 权限配置页（矩阵 / 角色 / 用户绑定 / 变更记录）；产物仍 `//go:embed`（`bash scripts/build.sh` 未改）；★ 新增 `scripts/run_tc_server.sh`（交叉编译 → 上传 → **服务器上**跑全套 TC），A11 可复现 |
+
+**② 验收判据自查（★ 不采信自报 ⇒ 每条都是我实跑的；运行类证据一律在测试服务器 `192.168.10.50`）**
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| A1 `check_all.sh` 全绿 | ✅ | 本机 `bash scripts/check_all.sh` ⇒ **必绿 11/11**，会报 2 项无命中 |
+| A2 8 类主数据 CRUD | ✅ | 服务器脚本实测（新增 / 检索 / 重复 409 / 停用 / 查历史链接口）**19/19 PASS** |
+| A3 版本链 | ❌ **被 `N-009` 挡住** | 服务器实测：改名 ⇒ **409「插入新版本被业务键唯一约束拒绝」**；`TC-M1-03` / `TC-M1-04` 按 `docs/04` 原样写、**不改期望不跳过**，当前红 |
+| A4 判定限按客户×物料 | ✅ | 纯单测 `TC-M1-05`/`TC-M1-06`（本机即可跑）+ 服务器接口实测：A 客户 `rank=2` 取 `1`、B 客户 `rank=0` 取通用 `9` |
+| A5 改一格立即生效 | ✅ | `TC-M2_01`（引擎口径 recv.label.print ALL→NONE ＋ 真实入口 md.vehicle **200→403**）；服务器复测同样 200→403→还原 200 |
+| A6 ★★ 防锁死后端拒绝 | ✅ | `TC-M2_06` 绕前端直调 PUT ⇒ **403** `防锁死：系统管理员角色的管理域权限不可修改或剥夺`；直连库确认该格仍 `ALL` |
+| A7 角色管理 | ✅ | 删除内置 `qc` ⇒ 409「内置角色不可删除」；复制建角色后两侧行为互不影响 |
+| A8 用户绑定多角色并集 | ✅ | 同 open_id 绑 3 角色并存；重复绑定 ⇒ 409「已被占用」 |
+| A9 权限变更写审计 | ✅ | 审计原文：`{"entity":"s_role_permission","action":"perm_change","field":"receiver × md.vehicle","old_value":"ALL","new_value":"NONE","actor_open_id":...,"reason":"A5 取证"}` |
+| A10 取消保存无部分生效 | ✅ | 半批含防锁死违规 ⇒ 整批 403，合法那半**未**落库 |
+| A11 M1/M2 的 TC 全过 | ⚠️ **13/15** | 服务器全套 TC：**58 PASS / 4 FAIL / 0 SKIP**（`permission 4` · `config 6` · `audit 3` · `store 16` · `httpapi 29`）。★ 4 个 FAIL = `TC-M1-03`、`TC-M1-04` 各在 store 与 httpapi 一份，**根因同为 `N-009`**，非实现缺陷 |
+| A12 权限点注册门禁 | ✅ | `check_perm_registry.py` 在必绿段，本轮新增消费端后仍绿（①②③④ 全过） |
+
+**★ 单点变异自证（做了 3 处，均还原后 `sha256` 与基线逐字一致）**
+
+| 变异 | 做法 | 变红证据 | 还原核对（SHA256） |
+|---|---|---|---|
+| M1（对应 A4） | `internal/store/limits.go` `LimitRank`：把优先级**颠倒**（通用 3 分、精确 0 分） | 本机：`TestTC_M1_06_Limit_MostSpecificWins` **FAIL**（"应取专属 1，实际 9"）＋ `TestLimitRank_Order` **FAIL**；`TC-M1_05` 仍绿（同客户不同值不依赖具体度阶梯）——恰是**预期那条**红 | 还原后 = `CA63EA3800D36C9CF856DF3124FAE24DC3D8EBB988B2CA5B60B0D7AA729A718A` ✅ |
+| M2（对应 A3） | `internal/store/masterdata.go`：`if e.Versioned` ⇒ `if false && e.Versioned`（版本链退化为**原地 UPDATE**） | 服务器：`TestLimit_CRUDAndLookup_SQL` **FAIL**（"判定限改后应为 v2，实际 1"，此前为绿）＋ `TC-M1_03`（"新版本必须是新行"）/ `TC-M1_04`（"版本链应有 2 版，实际 1"）红 | 还原后 = `D256A776825E36EFD2C12500B3D65E7C68EDD68F43B542953E220BB40DF630F4` ✅ |
+| M3（对应 A6） | `internal/store/permadmin.go`：删掉后端 `IsLockedCell` 拒绝（只留前端置灰） | 服务器：`TestTC_M2_06_DeadlockGuardRejectsDirectAPICall` **FAIL**（"后端必须拒绝…实际 200"）；★ 连带 6 条红 —— 因为 `sysadmin` **真的失权**，其后所有管理操作 403（这正是防锁死要防的事故形态，如实记录，非新缺陷） | 还原后 = `818A3D03F5FEBB3DD4DF45E5E3C9FA066A2C5753C51A647686A5794864BADB64` ✅ |
+
+> ★ 变异期间的两处**自曝并已修**：① 我的冒烟脚本 A5 断言曾**被多角色并集冲掉**（收货员另绑了 sales/qc ⇒ 改 NONE 仍 200）——已改用**只绑 receiver** 的账号复测，脚本自身先自证；② `TestLimit_CRUDAndLookup_SQL` 曾**改到别的检测项的行**（按全表找通用行）——已改为按本用例 `test_item_id` 定位；③ 变异 M3 留下的脏格已按 spec 种子归位（2 行），并给 M2 用例加了**收尾自愈**（库层归位，不依赖权限）。
+
+**③ 口径 / 实现决策（COLLAB §2 属我方域，写此备查）**
+
+- **读写分级**：`access.RequirePerm` 加**可选第三参**（`access.LevelAll` / `access.LevelRead`），读入口 READ、写入口 ALL ⇒ 「只读角色」真的只读。★ 级别常量放在 `access` 而非 `permission`：门禁会把 `RequirePerm` 实参里所有 `permission.XXX` 当权限点核验，写 `permission.LevelAll` 会被误判为「未登记权限点」（假红）——已实测踩过一次并回改。
+- **status 不进版本链**：按 `docs/01` P1「status 表达当前处于哪一步」，停用/启用是**原地状态流转**（`TC-M1_08` 断言 version 仍为 1）；只有**业务字段**改动才造新版本。
+- **"立即生效"的判据口径**：`标签打印` 属 M3（批 3 未建入口），故 `TC-M2_01` 用**两条口径**——① 判定引擎 `LevelsFor(recv, recv.label.print)` 改后即 NONE；② 用**真实入口** `GET /api/md/vehicles` 断言 200→403（同一守卫、无缓存）。
+- **权限守卫写法**：路由表里必须逐条写 `permission.XXX` 字面常量（传变量会被门禁判「无法静态核验」），故 `mdGuards()` 里是 16 条显式声明。
+- **依赖**：未新增任何 Go/前端依赖（仍只 echo + go-sql-driver + 既有 vue/vite）；`cgo` 未引入。
+- **前端验证的边界（如实说）**：按 `docs/05`，本机不得起监听、不得建隧道 ⇒ **无法做浏览器点击级验证**。已验证到的：`vite build` 通过、产物经 `//go:embed` 内嵌、服务器上首页 200 + `id="app"` 挂载点 + JS 资源可取、且 JS 产物里**确实包含**「权限矩阵 / 判定限 / 版本链 / 置灰」；页面所依赖的**每一个接口**都由 `TC-M1-*` / `TC-M2-*` 在服务器上打过。**未覆盖**：视觉与交互细节（折叠、下拉联动）——建议验收时在服务器侧开一次浏览器看一眼。
+
+**④ 阻塞（请 WorkBuddy 处置）**
+
+- **`N-009`（已开）**：6 张带版本链的主数据表 `UNIQUE(code)` **未含 `version`** ⇒ 版本链第二行必然 `1062`。已在服务器**事务内复现 + ROLLBACK**（不留数据）：`m_customer` 同 code 插第二行 `Duplicate entry '0001' for key 'm_customer.uk_customer_code'`；对照 `m_test_item_limit`（唯一键含 `version`）**两版都插得进** ⇒ 这不是实现取舍，是唯一键漏了列。
+- **需要的改动（6 行，属你的域）**：`spec/schema.sql` 41 / 59 / 76 / 98 / 122 / 163 → `UNIQUE KEY uk_xxx (code, version)`（车辆 `plate_no, version`），连带 `cp spec/schema.sql migrations/0001_init.sql`（否则 `TestMigrationsSchemaCopyMatchesSpec` 红）。
+- **我这边 spec 一改即可做**：① 复跑 `bash scripts/run_tc_server.sh` 应 **15/15**；② 已建库的 6 个索引对齐（`m_*` 当前实测 0 行，风险为零）——需要的话我在迁移里加一条**幂等索引对齐**（按 spec 比对 `information_schema.statistics`，不一致才 DROP/ADD），**不改任何列语义**。
+- **协议遵守**：本轮**只做本地提交、未 push**；`COLLAB.md` 只做了 N-007 段内**局部追加**（净 +37 行 + 本回执），未整体重写，`check_collab.py` / `check_collab_anchors.py` 均绿。
+- **状态**：因 A3 与 A11 未全绿，`N-007` 维持 `OPEN`（**不谎报 `MIMO-DONE`**）；`N-009` 解除后我复跑即可收口。
+
 ---
 
 ### N-008 · 轮次排他锁只覆盖「mimo 轮次」，未覆盖「心跳轮次 / 主会话」⇒ 工作区存在并发写风险
@@ -494,6 +553,43 @@
 - **制度影响面**：只动工具链脚本（`scripts/mimo_run_lock.sh` / `pulse.sh` / `drive_mimo.sh`），**不动任何规格 / 冻结口径 / 业务代码**。★ 实施前，心跳轮仍按现纪律执行：**mimo 在跑 ⇒ 一律不改文件、不提交**。
 - **状态**：OPEN
 - **最后更新**：2026-10-09 04:27
+
+---
+
+### N-009 · 6 张带版本链的主数据表 `UNIQUE(code)` 与「改＝作废＋新增」互斥（spec 内部冲突）
+
+- **提出方**：mimo
+- **类型**：冲突
+- **责任域**：**WorkBuddy**（`spec/schema.sql` 是冻结机读件；按任务包 §6-1「表结构以 spec 为准、要改 ⇒ 开议题」，我不自改）
+- **背景**：批 2 的 D1（`MIMO-NEXT-BATCH-02.md` §3-D1）要求「改 = 作废 + 新增」—— 原行 `is_current=0`，**INSERT 一行 `version+1` 且沿用同一 `code`**，并以「同一 `code` 下有且仅有一行 `is_current=1`」为不变量；`docs/04` 的 `TC-M1-03`（改客户名 ⇒ 产生新版本）与任务包 A3（直连库断言同 code 多版本）也都以**同 `code` 多行**为前提。但 `spec/schema.sql` 对 6 张带版本链的表把 `code`（车辆为 `plate_no`）设成了**单列唯一**：
+
+  | 位置 | 现状 | 表 |
+  |---|---|---|
+  | `spec/schema.sql:41` | `UNIQUE KEY uk_customer_code (code)` | `m_customer` |
+  | `spec/schema.sql:59` | `UNIQUE KEY uk_composition_code (code)` | `m_composition` |
+  | `spec/schema.sql:76` | `UNIQUE KEY uk_mtype_code (code)` | `m_material_type` |
+  | `spec/schema.sql:98` | `UNIQUE KEY uk_material_code (code)` | `m_material` |
+  | `spec/schema.sql:122` | `UNIQUE KEY uk_test_item_code (code)` | `m_test_item` |
+  | `spec/schema.sql:163` | `UNIQUE KEY uk_vehicle_plate (plate_no)` | `m_vehicle` |
+
+  ⇒ 第 2 行同 `code` 的 INSERT 必然 **MySQL 1062**，版本链**落不了库**。两者不可兼存。
+
+- **我方立场**：这是**规格内部冲突**（`spec/schema.sql` ↔ `docs/04` 的 UC/TC ↔ 任务包 D1），不是实现取舍；按铁律与任务包 §7，我**开议题、不自改规格**，同时**继续推进本批其余交付物**（`m_team`/`m_user` 本就豁免版本链；`m_test_item_limit` 的唯一键写法正确，版本链可正常落库 ⇒ D1 机制本身可先在判定限上跑通）。
+- **建议方案**（★ 推荐方案 A）：
+  - **A**：6 处唯一键补上 `version` → `UNIQUE KEY uk_xxx (code, version)`（车辆同理 `plate_no, version`）。★ **同文件内已有正确判例**：`spec/schema.sql:142` 的 `uk_limit_scope (test_item_id, customer_id, material_id, version)` 正是版本链该有的写法，这 6 张表是**漏了 `version`**。`TC-M1-02`（再用 `0001` 新增 ⇒ 唯一约束拒绝）在方案 A 下**仍成立**：新行 `version=1` 会与既有 `(0001,1)` 撞唯一键；且我方应用层会先按 `is_current=1` 查重再拒，DB 唯一键作兜底。
+  - **B**（不推荐）：删除这 6 个唯一键、唯一性完全交给应用层 —— 会丢掉 `TC-M1-02` 的 DB 兜底。
+- **制度影响面**：只改 6 行**索引定义**，**不动任何列语义**、不动授权矩阵、不动码规则、表数仍 38。连带两项（不改会红/会哑）：
+  1. `migrations/0001_init.sql` 是 `spec/schema.sql` 的**逐字节副本** ⇒ 需 `cp` 同步，否则 `TestMigrationsSchemaCopyMatchesSpec` 报红（`N-002` 已踩过一次）；
+  2. **已建库的索引要对齐**：迁移对已存在的表是**跳过**的（`internal/store/migrate.go` 按 `information_schema` 逐表判定），只改 spec 不会对 `jx_lab_trace` 里已建的 6 个索引起作用 ⇒ 建议由我在迁移里加一条**幂等的索引对齐**（按 spec 的 `UNIQUE KEY` 定义比对 `information_schema.statistics`，不一致才 `DROP/ADD`）。★ 这 6 张表当前实测 **0 行**（只读探针 2026-10-09），对齐零风险。**spec 一改我即可实现，不需你动代码。**
+- **实测证据 ①（只读探针）**：对 `192.168.10.50` 的 `jx_lab_trace` 查 `information_schema.statistics`，`m_customer` 的 `uk_customer_code` **仅含 `code` 单列**（`nonunique=0`），`m_test_item_limit` 的 `uk_limit_scope` 含 4 列（含 `version`）；`m_*` 业务表 `table_rows` 均为 **0**。
+- **实测证据 ②（真跑复现，事务内、随后 ROLLBACK，不留数据 · 2026-10-09 05:5x）**：
+  - `INSERT m_customer ('0001', v1, is_current=1)` ⇒ **成功**；
+  - 紧接 `INSERT m_customer ('0001', v2, is_current=1, supersedes_id=前一行)` ⇒ **`Error 1062 Duplicate entry '0001' for key 'm_customer.uk_customer_code'`**；
+  - 对照组：`m_test_item_limit` 同 scope 插 `v1` 与 `v2` **均成功**（唯一键含 `version`）。
+  ⇒ ★ **结论：不是实现取舍，是这 6 张表的唯一键漏了 `version`**；判定限表证明了「版本链 + 唯一键」本来可以共存。
+- **影响的验收判据**：`A3`（版本链）与 `A11` 中的 `TC-M1-03` / `TC-M1-04` —— **在本议题解除前这两条必红**（我方已按 `docs/04` 原样写成自动化测试，不改期望、不跳过），其余 13 条 TC 不受影响。
+- **状态**：OPEN
+- **最后更新**：2026-10-09 05:51
 
 ---
 

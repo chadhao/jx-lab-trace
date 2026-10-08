@@ -66,16 +66,118 @@ func (s *Server) Handler() *echo.Echo {
 	// —— 受权限点保护的入口（★ 集中声明；参数必须是权限点常量） ——
 	admin := e.Group("/api/admin")
 	admin.GET("/permission-points", s.handleListPermissionPoints,
-		access.RequirePerm(s.Store, permission.SysPermEdit))
+		access.RequirePerm(s.Store, permission.SysPermEdit, access.LevelRead))
 	admin.PATCH("/permission-points/:code", s.handlePatchPermissionPoint,
-		access.RequirePerm(s.Store, permission.SysPermEdit))
+		access.RequirePerm(s.Store, permission.SysPermEdit, access.LevelAll))
 	admin.GET("/audit-log", s.handleListAudit,
-		access.RequirePerm(s.Store, permission.SysAuditView))
+		access.RequirePerm(s.Store, permission.SysAuditView, access.LevelRead))
+
+	// ★ 批 2 · 权限矩阵（D4）：读也要权限点 ——「权限页自身也要有权限」。
+	//	写用 LevelAll ⇒ 只读（READ）角色连改都改不了。
+	admin.GET("/permission-matrix", s.handleGetMatrix,
+		access.RequirePerm(s.Store, permission.SysPermEdit, access.LevelRead))
+	admin.PUT("/permission-matrix", s.handleSaveMatrix,
+		access.RequirePerm(s.Store, permission.SysPermEdit, access.LevelAll))
+
+	// ★ 批 2 · 角色管理 + 用户绑定（D5，sys.user.manage）
+	admin.GET("/roles", s.handleListRoles,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelRead))
+	admin.POST("/roles", s.handleCreateRole,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelAll))
+	admin.PATCH("/roles/:code", s.handlePatchRole,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelAll))
+	admin.DELETE("/roles/:code", s.handleDeleteRole,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelAll))
+	admin.GET("/user-roles", s.handleListUserRoles,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelRead))
+	admin.GET("/user-roles/:open_id", s.handleGetUserRoles,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelRead))
+	admin.POST("/user-roles", s.handleBindUserRole,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelAll))
+	admin.DELETE("/user-roles/:open_id/:role_code", s.handleUnbindUserRole,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelAll))
 
 	// ★ 刻意**不提供**任何「新增 / 删除权限点」的入口（A8 / TC-M0-09）：
 	//   权限点字典由代码注册，后台只能启用/停用（见上 PATCH）。
 
+	// —— 批 2 · M1 主数据（8 类，每类 6 条路由） ——
+	s.mountMasterData(e)
+
 	// —— 前端（go:embed 内嵌的构建产物） ——
 	e.GET("/*", s.handleSPA)
 	return e
+}
+
+// mdGuard 是一类主数据的读/写守卫（读 = READ 级，写 = ALL 级）。
+type mdGuard struct {
+	read  echo.MiddlewareFunc
+	write echo.MiddlewareFunc
+}
+
+// mdGuards 集中声明主数据的受保护入口守卫。
+//
+// ★★ 这里必须**逐条写出 permission.XXX 常量**：scripts/check_perm_registry.py
+//
+//	判据③ 要求 RequirePerm 的实参能静态核验成已登记的权限点常量，
+//	传变量（如 g.Perm）会被判「无法静态核验」⇒ 假红。宁可写长，不可写活。
+func (s *Server) mdGuards() map[string]mdGuard {
+	return map[string]mdGuard{
+		"customers": {
+			read:  access.RequirePerm(s.Store, permission.MdCustomer, access.LevelRead),
+			write: access.RequirePerm(s.Store, permission.MdCustomer, access.LevelAll),
+		},
+		"compositions": {
+			read:  access.RequirePerm(s.Store, permission.MdMaterial, access.LevelRead),
+			write: access.RequirePerm(s.Store, permission.MdMaterial, access.LevelAll),
+		},
+		"material-types": {
+			read:  access.RequirePerm(s.Store, permission.MdMaterial, access.LevelRead),
+			write: access.RequirePerm(s.Store, permission.MdMaterial, access.LevelAll),
+		},
+		"materials": {
+			read:  access.RequirePerm(s.Store, permission.MdMaterial, access.LevelRead),
+			write: access.RequirePerm(s.Store, permission.MdMaterial, access.LevelAll),
+		},
+		"test-items": {
+			read:  access.RequirePerm(s.Store, permission.MdTestItem, access.LevelRead),
+			write: access.RequirePerm(s.Store, permission.MdTestItem, access.LevelAll),
+		},
+		"test-item-limits": {
+			read:  access.RequirePerm(s.Store, permission.MdTestItem, access.LevelRead),
+			write: access.RequirePerm(s.Store, permission.MdTestItem, access.LevelAll),
+		},
+		"vehicles": {
+			read:  access.RequirePerm(s.Store, permission.MdVehicle, access.LevelRead),
+			write: access.RequirePerm(s.Store, permission.MdVehicle, access.LevelAll),
+		},
+		"teams": {
+			read:  access.RequirePerm(s.Store, permission.MdTeam, access.LevelRead),
+			write: access.RequirePerm(s.Store, permission.MdTeam, access.LevelAll),
+		},
+	}
+}
+
+// mountMasterData 装配 /api/md/{entity} 的 6 条路由（× 8 类）。
+func (s *Server) mountMasterData(e *echo.Echo) {
+	guards := s.mdGuards()
+	g := e.Group("/api/md")
+	for _, entity := range []string{
+		"customers", "compositions", "material-types", "materials",
+		"test-items", "test-item-limits", "vehicles", "teams",
+	} {
+		gd, ok := guards[entity]
+		if !ok {
+			continue // 守卫缺席 ⇒ 该实体不挂路由（宁可 404，不可无守卫）
+		}
+		g.GET("/"+entity, s.handleMDList(entity), gd.read)
+		g.POST("/"+entity, s.handleMDCreate(entity), gd.write)
+		g.GET("/"+entity+"/:id", s.handleMDGet(entity), gd.read)
+		g.GET("/"+entity+"/:id/history", s.handleMDHistory(entity), gd.read)
+		g.PUT("/"+entity+"/:id", s.handleMDUpdate(entity), gd.write)
+		g.PATCH("/"+entity+"/:id/status", s.handleMDStatus(entity), gd.write)
+	}
+	// ★ 判定限解析入口（D3 / A4）：独立路径，避免与 /test-item-limits/:id 撞路由。
+	if gd, ok := guards["test-item-limits"]; ok {
+		e.GET("/api/limits/resolve", s.handleResolveLimit, gd.read)
+	}
 }

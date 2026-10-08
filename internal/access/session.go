@@ -139,13 +139,32 @@ func RequireLogin() echo.MiddlewareFunc {
 	}
 }
 
+// 授权级别字面量（与 spec/permission-points.json#levels 对齐）。
+//
+// ★ 为什么放在 access 而不是 permission 包：门禁 scripts/check_perm_registry.py
+//
+//	会把受保护入口守卫的实参里所有 `permission.XXX` 当成**权限点常量**去核验；
+//	级别若也写成 permission.LevelAll，会被误判为「未登记的权限点」⇒ 假红。
+//	级别不是权限点，故在这里声明为普通字符串。
+const (
+	LevelAll     = "ALL"     // 全（增 / 改 / 停）
+	LevelRead    = "READ"    // 只读
+	LevelInit    = "INIT"    // 仅发起
+	LevelApprove = "APPROVE" // 仅审批
+)
+
 // RequirePerm 受权限点保护的入口守卫：
 // 判定 = 角色 → 权限点 → 级别（多角色并集，无记录 ⇒ 拒绝）。
+//
+//   - 省略第三参 ⇒ 只要求「已授权」（任一非 NONE 级别）——批 1 的口径；
+//   - 传入级别 ⇒ 必须**达到**该级别（ALL 覆盖一切）：
+//     写入口用 access.LevelAll、读入口用 access.LevelRead，
+//     这样「只读」角色才真的只读（docs/01 §8.0：READ = 只读）。
 //
 // ★ 参数是 permission.Code **常量**（具名类型），裸写字符串编译不过；
 //
 //	门禁判据②③ 另行静态复核（scripts/check_perm_registry.py）。
-func RequirePerm(st *store.Store, code permission.Code) echo.MiddlewareFunc {
+func RequirePerm(st *store.Store, code permission.Code, need ...string) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			p := PrincipalFrom(c)
@@ -156,11 +175,20 @@ func RequirePerm(st *store.Store, code permission.Code) echo.MiddlewareFunc {
 			if err != nil {
 				return echo.NewHTTPError(http.StatusInternalServerError, "权限判定失败")
 			}
-			if !levels.Granted() {
+			needLevel := ""
+			if len(need) > 0 {
+				needLevel = need[0]
+			}
+			allowed := levels.Granted()
+			if needLevel != "" {
+				allowed = levels.Allows(needLevel)
+			}
+			if !allowed {
 				return echo.NewHTTPError(http.StatusForbidden, map[string]interface{}{
 					"error": "无权访问该入口",
 					"point": code.String(),
-					"hint":  "未映射角色或该角色在本权限点上为 NONE（deny by default）",
+					"need":  needLevel,
+					"hint":  "未映射角色、该角色在本权限点上为 NONE，或级别不足（deny by default）",
 				})
 			}
 			return next(c)

@@ -1,35 +1,69 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { ref, onMounted, computed } from 'vue'
+import { api } from './api.js'
+import MasterData from './components/MasterData.vue'
+import PermissionAdmin from './components/PermissionAdmin.vue'
 
-const health = ref(null)
+const page = ref('md')
 const me = ref(null)
-const error = ref('')
+const err = ref('')
 
-onMounted(async () => {
+async function loadMe() {
   try {
-    const h = await fetch('/healthz')
-    health.value = h.ok ? await h.json() : { status: 'FAIL ' + h.status }
-    const m = await fetch('/api/me')
-    me.value = m.ok ? await m.json() : null
+    me.value = await api.get('/api/me')
+    err.value = ''
   } catch (e) {
-    error.value = String(e)
+    me.value = null
+    err.value = e.status === 401 ? '未登录（或会话已失效）' : e.message
   }
+}
+onMounted(loadMe)
+
+const roleText = computed(() => {
+  if (!me.value) return ''
+  const all = [...(me.value.roles || []), ...(me.value.sys_roles || [])]
+  return all.length ? all.join(' / ') : '（无角色）'
 })
+
+async function devLogin() {
+  try {
+    await api.post('/api/auth/dev-login', {})
+    await loadMe()
+  } catch (e) {
+    err.value = 'dev 登录失败：' + e.message
+  }
+}
+async function logout() {
+  try {
+    await api.post('/api/auth/logout', {})
+  } catch (e) { /* 忽略 */ }
+  await loadMe()
+}
 </script>
 
 <template>
-  <main class="page">
-    <h1>实验检测数据追踪系统</h1>
-    <p>
-      健康检查：
-      <strong :class="{ ok: health?.status === 'ok' }">
-        {{ health ? health.status : '…' }}
-      </strong>
-      · 版本 {{ health?.version ?? '-' }}
-    </p>
-    <p v-if="me">已登录：{{ me.name }}（{{ me.open_id }}）· 角色：{{ [...(me.roles || []), ...(me.sys_roles || [])].join('、') || '无' }}</p>
-    <p v-else>未登录（dev 环境可用 <code>POST /api/auth/dev-login</code> 建会话）</p>
-    <p v-if="error" class="err">{{ error }}</p>
-    <p class="hint">M0 地基批：仅最小可用页面；业务页面自批 2 起。</p>
+  <header class="topbar">
+    <div class="brand">江熙新材 · 实验检测数据追踪</div>
+    <nav>
+      <button :class="{ on: page === 'md' }" @click="page = 'md'">主数据</button>
+      <button :class="{ on: page === 'perm' }" @click="page = 'perm'">权限配置</button>
+    </nav>
+    <div class="who">
+      <template v-if="me">
+        <span>{{ me.name }}</span>
+        <span class="roles">{{ roleText }}</span>
+        <button class="ghost" @click="logout">退出</button>
+      </template>
+      <template v-else>
+        <button @click="devLogin">dev 登录</button>
+      </template>
+    </div>
+  </header>
+
+  <p v-if="err" class="err">{{ err }}</p>
+
+  <main>
+    <MasterData v-if="page === 'md'" :me="me" />
+    <PermissionAdmin v-else :me="me" />
   </main>
 </template>

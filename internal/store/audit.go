@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/chadhao/jx-lab-trace/internal/audit"
@@ -15,19 +16,56 @@ func (s *Store) AppendAudit(ctx context.Context, e audit.Entry) error {
 	if err := e.Validate(); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO s_audit_log
-			(entity, entity_id, action, field, old_value, new_value,
-			 actor_open_id, actor_name, actor_role, ip, reason, created_by)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'app')`,
-		e.Entity, nullID(e.EntityID), e.Action, nullIfEmpty(e.Field),
-		nullIfEmpty(e.OldValue), nullIfEmpty(e.NewValue),
-		e.ActorOpenID, e.ActorName, nullIfEmpty(e.ActorRole),
-		nullIfEmpty(e.IP), nullIfEmpty(e.Reason))
+	_, err := s.db.ExecContext(ctx, auditInsertSQL, auditArgs(e)...)
 	if err != nil {
 		return fmt.Errorf("写入审计日志失败: %w", err)
 	}
 	return nil
+}
+
+// appendAuditTx 在**同一事务**内落一笔审计（UC-M0-05「同事务写 s_audit_log」）：
+// 业务写入与留痕要么一起提交、要么一起回滚 —— 不允许「写成功但没留痕」。
+func appendAuditTx(ctx context.Context, tx *sql.Tx, e audit.Entry) error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, auditInsertSQL, auditArgs(e)...); err != nil {
+		return fmt.Errorf("写入审计日志失败: %w", err)
+	}
+	return nil
+}
+
+const auditInsertSQL = `
+		INSERT INTO s_audit_log
+			(entity, entity_id, action, field, old_value, new_value,
+			 actor_open_id, actor_name, actor_role, ip, reason, created_by)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'app')`
+
+func auditArgs(e audit.Entry) []interface{} {
+	return []interface{}{
+		e.Entity, nullID(e.EntityID), e.Action, nullIfEmpty(truncateField(e.Field)),
+		nullIfEmpty(e.OldValue), nullIfEmpty(e.NewValue),
+		e.ActorOpenID, e.ActorName, nullIfEmpty(e.ActorRole),
+		nullIfEmpty(e.IP), nullIfEmpty(e.Reason),
+	}
+}
+
+// truncateField 截断 s_audit_log.field —— 该列是 VARCHAR(64)（**64 个字符**），
+// 超长会 1406 并让**整笔业务写入**跟着回滚；完整内容在 old/new_value（TEXT）里。
+// ★ 按 rune 截，避免把中文字劈开。
+func truncateField(s string) string {
+	const max = 64
+	if len(s) <= max {
+		return s
+	}
+	n := 0
+	for i := range s {
+		if n == max {
+			return s[:i]
+		}
+		n++
+	}
+	return s
 }
 
 // AuditRow 是 s_audit_log 的一行（审计查看接口用）。
