@@ -62,7 +62,7 @@
 | **mimo 状态** | ★ 批 1 已交付并 `AGREED`；批 2 已派工，等待交付（驱动：`bash scripts/drive_mimo.sh N-007 MIMO-NEXT-BATCH-02.md 5`） |
 | **阻塞项** | ★ **无阻塞**（原「推送待用户提供远端地址」已于 2026-10-09 01:42 解除：`origin` 已接 `git@github.com:chadhao/jx-lab-trace.git`）。★ 长期待外部输入（**不阻塞开工**）：`U1` 飞书应用凭据（批 1/2 用 **dev 模式桩**顶替）· `U2` 检测项目种子数据（批 2 继续用草案顶替） |
 | **★ 门禁状态** | ★ **11/11 全绿**（`bash scripts/check_all.sh`，exit 0，2026-10-09 03:1x 提交前复测）—— 本轮的 `N-002` 修复曾在中间态报红（`spec/schema.sql` 改了注释而 `migrations/` 逐字节副本未同步），**已同步修复**；两个会报项均无命中 |
-| **★ 推送状态** | ✅ **已接远端** —— `origin` = **`git@github.com:chadhao/jx-lab-trace.git`**，分支 **`main`**。★ `origin/main` 现为 **`83cc687`**（批 1 验收 + 运维教训）；**本轮 `N-002`~`N-006` 处置的推送哈希见紧随其后的「§1 推送状态同步」提交**。★★ **协议定案：mimo 只做本地提交；推送由 WorkBuddy 在独立验收通过后执行**。 |
+| **★ 推送状态** | ✅ **已接远端** —— `origin` = **`git@github.com:chadhao/jx-lab-trace.git`**，分支 **`main`**。★ `origin/main` 现为 **`bb211d8`**（本轮：`N-002`~`N-006` 处置 ＋ 批 2 派工 `N-007`；上一条为批 1 验收 `83cc687`）。★ **推送前必查三项已执行**：SSH 凭据可用（`Hi chadhao!`）✓ · **库内无明文密钥**（`git grep -e "JxLt2026" -e "jdf7ulmt"` **零命中**；`.env` / `.env.deploy` 均被 `.gitignore` 覆盖）✓ · 分支名 `main` ✓ · 推后核对 `git rev-parse HEAD == git ls-remote origin refs/heads/main` ✓。★★ **协议定案：mimo 只做本地提交；推送由 WorkBuddy 在独立验收通过后执行**。 |
 | **当前最大议题 ID** | **`N-007`**（`N-001` 批 1 实现 → `AGREED`；`N-002`·`N-003`·`N-004`·`N-005`·`N-006` → **全部 `AGREED`**；`N-007` = **批 2 派工**，`OPEN`） |
 | **最后更新** | 2026-10-09 03:18 · WorkBuddy（批 1 收口：`N-002`~`N-006` 处置完毕 + 批 2 派工 `N-007`） |
 
