@@ -51,6 +51,26 @@ ls -l "$LOCAL_BIN" | awk '{print "      "$5" bytes  "$9}'
 echo "[2/4] 确保服务器目录存在（家目录下，免 sudo）"
 ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p ~/$REMOTE_DIR/{bin,logs,attachments} && echo ok"
 
+# ★ [2.5/4]（mimo 批 1 修，见 COLLAB N-003）：要重启就必须**先停旧进程再上传** ——
+#   旧进程正在执行 bin/jxlabtrace 时，scp 对该文件 O_TRUNC ⇒ Linux 返回
+#   ETXTBSY（Text file busy）⇒ 上传失败 ⇒ set -e 退出 ⇒ **重启根本没发生**，
+#   「A4 会话跨重启」会因此变成**没有重启的假绿**。实测留档见 N-003。
+if [ "$DO_RESTART" = 1 ]; then
+  echo "[2.5/4] 停远端旧进程（只动我们自己的 run.pid，不碰 jxapproval / RustFS / hnyc-erp）"
+  ssh "${SSH_OPTS[@]}" "$HOST" "bash -s" <<REMOTE
+set -u
+cd ~/$REMOTE_DIR
+pid="\$(cat run.pid 2>/dev/null || true)"
+if [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null; then
+  kill "\$pid"; sleep 1
+  kill -0 "\$pid" 2>/dev/null && kill -9 "\$pid" 2>/dev/null || true
+  echo "旧进程已停止（PID \$pid）"
+else
+  echo "无旧进程"
+fi
+REMOTE
+fi
+
 echo "[3/4] 上传二进制与运行配置"
 scp "${SSH_OPTS[@]}" "$LOCAL_BIN" "$HOST:~/$REMOTE_DIR/bin/$BIN_NAME" >/dev/null
 scp "${SSH_OPTS[@]}" "$ENV_FILE"  "$HOST:~/$REMOTE_DIR/.env" >/dev/null

@@ -1,0 +1,168 @@
+{
+  "spec": "jx-lab-trace.permission-points",
+  "spec_version": 1,
+  "frozen_at": "2026-10-08",
+  "status": "proposed",
+  "source_doc": "docs/01-设计定案.md §8",
+  "note": "权限点字典 + 角色 + 初始授权种子。★ 权限点字典【由代码注册、后台不可增删】——后台只能改 s_role_permission 里的 level。",
+
+  "levels": {
+    "ALL": "全（新增 / 修改 / 停用）",
+    "READ": "只读",
+    "INIT": "仅发起",
+    "APPROVE": "仅审批 / 确认",
+    "NONE": "无"
+  },
+
+  "roles": [
+    { "code": "receiver", "name": "收货员", "kind": "business", "is_system": true, "note": "含库管 / 门岗" },
+    { "code": "qc", "name": "质检员", "kind": "business", "is_system": true, "note": "质检技术部 / 化验室" },
+    { "code": "production", "name": "生产班组", "kind": "business", "is_system": true },
+    { "code": "management", "name": "管理层", "kind": "business", "is_system": true, "note": "项目总经理 / 副总" },
+    { "code": "sales", "name": "销售", "kind": "business", "is_system": true, "note": "★ 由原「管理层/销售」拆出（D17）；无任何审批权" },
+    { "code": "sysadmin", "name": "系统管理员", "kind": "system", "is_system": true, "note": "★ 只管管理域，不自动拥有任何业务权限" }
+  ],
+
+  "split_rule": "同一件事需要两个角色串行完成的，一律拆成「发起」与「审批」两个权限点 —— 因为两个角色做的是不同的事。目前 3 组：紧急放行 · 留样销毁 · 出货单撤销。",
+
+  "permission_points": [
+    { "code": "md.customer", "module": "主数据", "name": "客户档案（独立模块，增删改查）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "md.material", "module": "主数据", "name": "物料档案（原料组成 / 原料类型 / 物料）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "md.test_item", "module": "主数据", "name": "检测项目常量表（项目 / 单位 / 方法 / 判定限）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "md.vehicle", "module": "主数据", "name": "车辆档案", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "md.team", "module": "主数据", "name": "班组档案", "levels": ["ALL", "READ", "NONE"] },
+
+    { "code": "recv.notice.create", "module": "收货", "name": "预报登记（车 / 司机 / 电话）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "recv.notice.edit", "module": "收货", "name": "预报修改 / 取消", "levels": ["ALL", "NONE"] },
+    { "code": "recv.arrive.confirm", "module": "收货", "name": "到货确认（生成车次与车码）", "levels": ["ALL", "NONE"] },
+    { "code": "recv.weigh", "module": "收货", "name": "过磅录入（毛重 / 皮重 / 净重）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "recv.bag.gen", "module": "收货", "name": "袋数录入 + 批量生成袋码", "levels": ["ALL", "NONE"] },
+    { "code": "recv.label.print", "module": "收货", "name": "标签打印", "levels": ["ALL", "NONE"] },
+    { "code": "recv.label.reprint", "module": "收货", "name": "标签补打（须填原因）", "levels": ["ALL", "NONE"] },
+    { "code": "recv.return", "module": "收货", "name": "退车执行登记", "levels": ["ALL", "READ", "NONE"] },
+
+    { "code": "sample.take", "module": "取样", "name": "扫码取样（份样 / 大样 / 保留样）", "levels": ["ALL", "NONE"] },
+    { "code": "sample.retain.in", "module": "取样", "name": "留样入库（位置 / 保留期限）", "levels": ["ALL", "NONE"] },
+    { "code": "sample.retain.lend", "module": "取样", "name": "留样借出 / 归还登记", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "sample.retain.destroy.init", "module": "取样", "name": "留样销毁 · 发起", "levels": ["INIT", "NONE"] },
+    { "code": "sample.retain.destroy.approve", "module": "取样", "name": "留样销毁 · 审批", "levels": ["APPROVE", "NONE"] },
+
+    { "code": "prod.batch.create", "module": "生产", "name": "建生产批", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "prod.feed.scan", "module": "生产", "name": "投料扫码（扫吨袋码）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "prod.feed.correct", "module": "生产", "name": "投料记录更正（须填原因，留版本链）", "levels": ["ALL", "NONE"] },
+    { "code": "prod.op.log", "module": "生产", "name": "作业段记录（班组 / 时间 / 产量）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "prod.fg.gen", "module": "生产", "name": "成品批 / 成品袋生成与打码", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "prod.rework", "module": "生产", "name": "返工批（新批号 + 关联原批）", "levels": ["ALL", "INIT", "READ", "NONE"] },
+
+    { "code": "insp.task.view", "module": "检测", "name": "查看检测任务", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "insp.scope.edit", "module": "检测", "name": "生成 / 调整批次检测项清单", "levels": ["ALL", "NONE"] },
+    { "code": "insp.result.entry", "module": "检测", "name": "检测结果录入", "levels": ["ALL", "NONE"] },
+    { "code": "insp.result.correct", "module": "检测", "name": "检测结果修正（作废 + 新增版本）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "insp.file.upload", "module": "检测", "name": "上传检测附件", "levels": ["ALL", "NONE"] },
+    { "code": "insp.conclusion", "module": "检测", "name": "出检测结论（合格 / 不合格 / 让步）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "insp.disposition", "module": "检测", "name": "不合格处置（退货 / 换货 / 让步接收 / 返工）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "insp.concession.qc_sign", "module": "检测", "name": "让步接收 · 质检方签署", "levels": ["ALL", "NONE"] },
+    { "code": "insp.concession.dept_sign", "module": "检测", "name": "让步接收 · 使用部门签署", "levels": ["ALL", "NONE"] },
+    { "code": "insp.urgent.release.init", "module": "检测", "name": "紧急放行 · 发起", "levels": ["INIT", "NONE"] },
+    { "code": "insp.urgent.release.approve", "module": "检测", "name": "紧急放行 · 审批", "levels": ["APPROVE", "NONE"] },
+
+    { "code": "ship.load.scan", "module": "出货", "name": "装车扫码归集（生成出货单）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "ship.out.register", "module": "出货", "name": "出场登记", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "ship.void.init", "module": "出货", "name": "出货单撤销 · 发起", "levels": ["INIT", "READ", "NONE"] },
+    { "code": "ship.void.approve", "module": "出货", "name": "出货单撤销 · 审批", "levels": ["APPROVE", "NONE"] },
+
+    { "code": "trace.forward", "module": "追溯", "name": "正向追溯（车 → 成品）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "trace.backward", "module": "追溯", "name": "反向追溯（成品 → 车）", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "trace.batch.view", "module": "追溯", "name": "批次档案查看", "levels": ["ALL", "READ", "NONE"] },
+
+    { "code": "report.generate", "module": "报告", "name": "生成对外报告页", "levels": ["ALL", "NONE"] },
+    { "code": "report.share.manage", "module": "报告", "name": "分享管理（有效期 / 撤销 / 访问记录）", "levels": ["ALL", "NONE"] },
+
+    { "code": "rpt.view", "module": "报表", "name": "查看基础报表", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "rpt.export", "module": "报表", "name": "导出报表", "levels": ["ALL", "NONE"] },
+
+    { "code": "sys.user.manage", "module": "系统管理", "name": "用户与角色管理", "levels": ["ALL", "NONE"] },
+    { "code": "sys.perm.edit", "module": "系统管理", "name": "权限配置（本页写操作受此点保护）", "levels": ["ALL", "NONE"] },
+    { "code": "sys.audit.view", "module": "系统管理", "name": "审计日志查看", "levels": ["ALL", "READ", "NONE"] },
+    { "code": "sys.code.rule", "module": "系统管理", "name": "编码规则版本配置", "levels": ["ALL", "NONE"] },
+    { "code": "sys.param.edit", "module": "系统管理", "name": "系统参数 / 常量配置", "levels": ["ALL", "NONE"] }
+  ],
+
+  "seed": {
+    "md.customer":                { "receiver": "READ", "qc": "READ", "production": "NONE", "management": "READ", "sales": "ALL", "sysadmin": "NONE" },
+    "md.material":                { "receiver": "READ", "qc": "ALL", "production": "READ", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "md.test_item":               { "receiver": "READ", "qc": "ALL", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "md.vehicle":                 { "receiver": "ALL", "qc": "READ", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "md.team":                    { "receiver": "READ", "qc": "ALL", "production": "READ", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+
+    "recv.notice.create":         { "receiver": "ALL", "qc": "READ", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "recv.notice.edit":           { "receiver": "ALL", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "recv.arrive.confirm":        { "receiver": "ALL", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "recv.weigh":                 { "receiver": "ALL", "qc": "READ", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "recv.bag.gen":               { "receiver": "ALL", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "recv.label.print":           { "receiver": "ALL", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "recv.label.reprint":         { "receiver": "ALL", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "recv.return":                { "receiver": "ALL", "qc": "READ", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+
+    "sample.take":                { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "sample.retain.in":           { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "sample.retain.lend":         { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "sample.retain.destroy.init":    { "receiver": "NONE", "qc": "INIT", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "sample.retain.destroy.approve": { "receiver": "NONE", "qc": "NONE", "production": "NONE", "management": "APPROVE", "sales": "NONE", "sysadmin": "NONE" },
+
+    "prod.batch.create":          { "receiver": "NONE", "qc": "READ", "production": "ALL", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "prod.feed.scan":             { "receiver": "NONE", "qc": "READ", "production": "ALL", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "prod.feed.correct":          { "receiver": "NONE", "qc": "NONE", "production": "ALL", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "prod.op.log":                { "receiver": "NONE", "qc": "READ", "production": "ALL", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "prod.fg.gen":                { "receiver": "NONE", "qc": "READ", "production": "ALL", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "prod.rework":                { "receiver": "NONE", "qc": "ALL", "production": "INIT", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+
+    "insp.task.view":             { "receiver": "READ", "qc": "ALL", "production": "READ", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "insp.scope.edit":            { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "insp.result.entry":          { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "insp.result.correct":        { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "insp.file.upload":           { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "insp.conclusion":            { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "insp.disposition":           { "receiver": "READ", "qc": "ALL", "production": "READ", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "insp.concession.qc_sign":    { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "insp.concession.dept_sign":  { "receiver": "NONE", "qc": "NONE", "production": "ALL", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "insp.urgent.release.init":      { "receiver": "NONE", "qc": "INIT", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "insp.urgent.release.approve":   { "receiver": "NONE", "qc": "NONE", "production": "NONE", "management": "APPROVE", "sales": "NONE", "sysadmin": "NONE" },
+
+    "ship.load.scan":             { "receiver": "ALL", "qc": "READ", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "ship.out.register":          { "receiver": "ALL", "qc": "READ", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
+    "ship.void.init":             { "receiver": "INIT", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "READ", "sysadmin": "NONE" },
+    "ship.void.approve":          { "receiver": "NONE", "qc": "NONE", "production": "NONE", "management": "APPROVE", "sales": "NONE", "sysadmin": "NONE" },
+
+    "trace.forward":              { "receiver": "READ", "qc": "ALL", "production": "READ", "management": "ALL", "sales": "ALL", "sysadmin": "NONE" },
+    "trace.backward":             { "receiver": "READ", "qc": "ALL", "production": "READ", "management": "ALL", "sales": "ALL", "sysadmin": "NONE" },
+    "trace.batch.view":           { "receiver": "READ", "qc": "ALL", "production": "READ", "management": "ALL", "sales": "ALL", "sysadmin": "NONE" },
+
+    "report.generate":            { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "ALL", "sales": "ALL", "sysadmin": "NONE" },
+    "report.share.manage":        { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "ALL", "sales": "ALL", "sysadmin": "NONE" },
+
+    "rpt.view":                   { "receiver": "READ", "qc": "ALL", "production": "READ", "management": "ALL", "sales": "ALL", "sysadmin": "NONE" },
+    "rpt.export":                 { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "ALL", "sales": "ALL", "sysadmin": "NONE" },
+
+    "sys.user.manage":            { "receiver": "NONE", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "ALL" },
+    "sys.perm.edit":              { "receiver": "NONE", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "ALL" },
+    "sys.audit.view":             { "receiver": "NONE", "qc": "NONE", "production": "NONE", "management": "READ", "sales": "NONE", "sysadmin": "ALL" },
+    "sys.code.rule":              { "receiver": "NONE", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "ALL" },
+    "sys.param.edit":             { "receiver": "NONE", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "ALL" }
+  },
+
+  "constraints": {
+    "point_registry": "权限点字典由代码注册，后台不可增删（只能启用/停用）",
+    "check_1": "每个权限点必须至少被一处代码消费 —— 防「配了没用」",
+    "check_2": "每个受保护入口必须引用已登记的权限点常量，禁止裸写字符串 —— 防「字典改了代码没跟上」",
+    "deadlock_guard": "系统管理员角色的管理域权限不可被后台修改或剥夺；系统保持至少一个管理员账号；环境变量 JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID 兜底",
+    "sysadmin_has_no_business_perm": "系统管理员不自动拥有任何业务权限（最小权限）—— 种子中 sysadmin 的业务点一律 NONE",
+    "multi_role_union": "一个账号可叠加多个角色，权限取并集",
+    "approval_scope": "「需要审批」只用于有跨部门影响的事项：留样销毁 · 紧急放行 · 出货单撤销 · 让步接收双签；其余更正一律不审批，只做「填原因 + 版本链留痕」",
+    "row_level": "行级 / 列级权限一期不做（s_permission_point.scope_kind 预留）"
+  },
+
+  "conversion": {
+    "全": "ALL", "读": "READ", "发": "INIT", "批": "APPROVE", "—": "NONE"
+  }
+}

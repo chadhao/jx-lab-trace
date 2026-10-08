@@ -40,15 +40,15 @@
 | 项 | 值 |
 |---|---|
 | **项目** | `jx-lab-trace` · 实验检测数据追踪系统（江熙新材 · 岳阳城陵矶磨粉项目） |
-| **当前批次** | ★ **尚未开工** —— 设计定案 **v0.7** 已出（`docs/01`）· 模块划分与批次已出（`docs/03`）· 模块用例与测试用例已出（`docs/04`）· 机读规格已出（`spec/`）；**批 1（M0 地基）任务包已备**（`MIMO-NEXT-BATCH-01.md`） |
+| **当前批次** | ★ **批 1（M0 地基）已交付、待 WorkBuddy 独立验收** —— 交付物 D1–D8 全部就位；验收判据 A1–A11 的实测证据见 §4 `N-001` 的 mimo 回执 |
 | **WorkBuddy 状态** | ★ 设计段完成，等待派工批 1 |
-| **★ mimo 下一步** | ★ **执行 `MIMO-NEXT-BATCH-01.md`**（M0 地基：骨架 / 配置 / MySQL 迁移 / 飞书免登 / 会话落库 / 权限引擎 / 审计 / 门禁跑通） |
-| **mimo 状态** | ★ **已恢复驱动** —— 空转轮次（PID 37172）已终止；缺的 DB 凭据已由 WorkBuddy 找回并实测连通，以环境变量 `JX_DB_DSN` 注入；**无源码产出**（截至 2026-10-09 00:25，仓库仍为零业务代码） |
+| **★ mimo 下一步** | ★ **等批 1 验收**（验收通过后接批 2：M1 主数据 + M2 权限配置页） |
+| **mimo 状态** | ★ **批 1 MIMO-DONE（2026-10-09 02:22）** —— 仓库骨架 / 配置 / 幂等迁移 / 飞书免登（dev 桩 + 真实客户端）/ 会话落库与滑动续期 / 权限引擎 / 审计 / 前端内嵌 / 门禁第 10 项全部交付；★ **验证一律在测试服务器**（docs/05）：A2–A6、A10、A11 均在 `192.168.10.50` 实测（含真实进程重启）；本机只跑编译 / 纯单测 / 门禁 |
 | **阻塞项** | ★ **无阻塞**（原「推送待用户提供远端地址」已于 2026-10-09 01:42 解除：`origin` 已接 `git@github.com:chadhao/jx-lab-trace.git`）。★ 长期待外部输入（**不阻塞开工**）：`U1` 飞书应用凭据（批 1 用 **dev 模式桩**顶替）· `U2` 检测项目种子数据（批 2 用草案顶替） |
-| **★ 门禁状态** | ★ **已建立**，基线 **9/9 全绿**（`bash scripts/check_all.sh`，exit 0，2026-10-09 00:16 复测） |
+| **★ 门禁状态** | ★ **11/11 全绿**（`bash scripts/check_all.sh`，exit 0，2026-10-09 02:25 提交前复测）—— 含批 1 新增的必绿第 10 项 **`scripts/check_perm_registry.py`**（权限点「注册 ⇄ 消费」四判据 + `--selftest` 自证）；两个会报项均无命中 |
 | **★ 推送状态** | ✅ **已接远端并推送（2026-10-09 01:42）** —— `origin` = **`git@github.com:chadhao/jx-lab-trace.git`**，分支 **`main`**；★ 本地 `HEAD` 与 `origin/main` **一致**（`13786f7`，30 个文件）。★ **推送前必查三项已执行**：SSH 凭据可用 ✓ · **库内无明文密钥**（`git grep` 零命中；`.env` / `.env.deploy` 均被 `.gitignore` 覆盖、未入库）✓ · 分支名 `main` ✓。★★ **协议定案：mimo 只做本地提交；推送由 WorkBuddy 在独立验收通过后执行**（对应用户「由你测试推送」）。 |
-| **当前最大议题 ID** | **`N-001`**（唯一议题，状态 `ESCALATED`） |
-| **最后更新** | 2026-10-09 00:25 · WorkBuddy |
+| **当前最大议题 ID** | **`N-004`**（`N-001` 批 1 实现 → `MIMO-DONE`；新开 `N-002` 规格计数不一致 · `N-003` 部署脚本 ETXTBSY · `N-004` 模板 DSN 未加引号，均见 §4） |
+| **最后更新** | 2026-10-09 02:22 · mimo |
 
 ---
 
@@ -102,8 +102,8 @@
 - **我方立场**：M0 的范围必须**只含地基、不含任何业务单据**，否则第一批会膨胀到无法一次验收。
 - **建议方案**：按 [`MIMO-NEXT-BATCH-01.md`](./MIMO-NEXT-BATCH-01.md) 执行；交付物 D1–D8、验收判据 A1–A11 已在任务包中逐条列明。
 - **制度影响面**：**不动任何已冻结口径** —— `spec/code-rules.json`（码规则 v1）· `spec/schema.sql`（38 张表）· `spec/permission-points.json`（51 权限点）在本批**只读**；要改须开新议题。
-- **状态**：OPEN
-- **最后更新**：2026-10-09 00:25
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-09 02:22
 
 **WorkBuddy 交付（本轮）**：`docs/03` `docs/04` 新增；`spec/` 三个规格 + 两个自校验脚本已就位；`scripts/check_all.sh` 及 6 个检查器已就位，**必绿基线 9/9 全绿**（交办前实测）。
 ★ `scripts/check_uc_tc.py`（用例↔测试用例覆盖门禁）**已由 WorkBuddy 实现并纳入必绿**，故任务包 D8 中该项**不再是 mimo 的交付物**（任务包已同步修正）。
@@ -245,6 +245,94 @@
 - ★ **`scripts/mimo_run_lock.sh` 自带 `selftest`**（**14 探针**，含两组回归：父目录不存在、owner 已死）⇒ **当前 14 通过 / 0 失败**，任何人可复跑。
   - ★ 其中一处**是我的测试期望写错了、不是实现错**：用外部长命 owner 抢锁后，`release` **应当拒绝**（它不该释放"别人的锁"）—— 已把期望改正，并**先让 owner 死掉**再验 release 成功。
 - ★ 另修：`pulse.sh` 的驱动 PID 解析曾**误抓到无关进程**（`scripts/check_mimo_stall.py`）—— 若走到杀进程分支会**杀错人**。⇒ 改用 `ps` 字段精确匹配（`$6` 为 bash 且 `$7` 为 `scripts/drive_mimo*`）；实测解析结果 `drive_mimo=[2131]`、`mimo.exe=[16884]` 精确无误。
+
+**★★ mimo 回执 · 2026-10-09 02:22 · 批 1（M0 地基）交付完毕，状态改 `MIMO-DONE`**
+
+**① 交付物 D1–D8 落位**
+
+| 交付 | 实现位置 | 要点 |
+|---|---|---|
+| D1 仓库骨架 | `cmd/jxlabtrace` · `internal/{config,store,httpapi,permission,access,audit,codec,webui}` · `migrations/` · `web/`（Vue3+Vite） · `scripts/` | `go 1.24`；构建走**原版** `scripts/build.sh`（我曾误覆盖、已 `git checkout` 还原其原内容）→ `web/dist` → `internal/webui/dist`（`//go:embed`）→ `bin/jxlabtrace` |
+| D2 配置 | `internal/config` | `JX_DB_DSN` **无缺省即拒启**；`JX_SESSION_TTL=12h` / `JX_HTTP_ADDR=127.0.0.1:8080` / `JX_ATTACH_DIR=/srv/jx-lab-trace/attachments` 有安全缺省；`JX_DEV_MODE=true` 必须配 `JX_DEV_OPEN_ID` 否则拒启；启动日志**回显生效值、DSN 口令打码**（`jx_lab:***@tcp(...)`） |
+| D3 迁移 | `migrations/0001_init.sql` + `internal/store/migrate.go` | 幂等（逐条查 `information_schema` 跳过已存在）；★ 表结构以 `spec/schema.sql` 为准 —— 该文件以**逐字节副本**内嵌，`internal/store/migrations_sync_test.go` 机检副本=原件；**`-migrate` 子命令与启动自动迁移并存**（回执口径：两者都做，启动必跑）；种入 51 权限点 + 6 角色 + 306 授权 |
+| D4 飞书免登 | `internal/access/feishu.go` + `POST /api/auth/dev-login` | 真实链路（授权→回调→换 `open_id`→查角色→建会话）已实现，等 `U1` 凭据联调；**本批用 dev 桩**；★ 未映射任何角色 ⇒ **403 deny by default**（登录与入口判定双层） |
+| D5 会话 | `s_session` + `internal/access/session.go` | **落库**（无内存 map）；滑动续期时**服务端 `expires_at` 与 cookie `Max-Age` 同批续**；`HttpOnly` + `SameSite=Lax`（非 dev 加 `Secure`）；登出写 `revoked_at` ⇒ 重启后仍失效 |
+| D6 权限引擎 | `internal/permission`（`code.go` 单一声明文件 + `all.go` 注册表 + `engine.go`）· `internal/access.RequirePerm` | `permission.Code` **具名类型** ⇒ 裸写字符串**编译期**即报错；判定＝角色→权限点→级别、多角色并集、无记录⇒NONE；示例受保护入口：`GET /api/admin/permission-points` 受 `sys.perm.edit`、`GET /api/admin/audit-log` 受 `sys.audit.view`（回执口径：D6 只要求≥1 个，这里给了 2 个） |
+| D7 审计 | `internal/audit` + `store.AppendAudit` | 统一入口、**只 INSERT**；本批权限相关写操作（PATCH 权限点启停）全量落 `s_audit_log`（含 actor/ip/old→new/reason） |
+| D8 门禁 | `scripts/check_perm_registry.py`（必绿第 10 项） | ①每个 spec `code` 至少一处代码消费 ②代码里的权限点标识必须已登记 ③受保护入口禁裸写（常量集中单一声明文件）④seed 与库内 `s_role_permission` 行数一致（经 `scripts/jxq` **只读查库**，缺 DSN 即判红）；`--selftest` 用 4 个违规样本自证判据有牙齿 |
+
+**② 验收判据 A1–A11（★ 按 docs/05，凡涉运行/重启的证据一律在测试服务器 `192.168.10.50` 采集）**
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| A1 `check_all.sh` 必绿全绿 | ✅ | 本机 `bash scripts/check_all.sh` ⇒ **必绿 11/11**，exit 0，会报 2 项均无命中 |
+| A2 迁移幂等 | ✅ | 服务器 `./bin/jxlabtrace -migrate` ×2：rc=0/0，两次均「表数 = 38」，第二次 0 新建；空库→38 的首次创建由 WorkBuddy 00:45 实测「现有表数=0」＋迁移后 38 佐证 |
+| A3 dev 模式可登入 | ✅ | 服务器 `POST /api/auth/dev-login` → 200，下发 `jx_sid`；`GET /api/me` → 200 |
+| A4 ★★ 会话跨重启有效 | ✅ | **真实进程重启**（PID 2382635 → 2382780，`kill` 后重新部署启动）⇒ 原 cookie `GET /api/me`=200、受保护入口=200 |
+| A5 ★ 登出后重启仍失效 | ✅ | 登出 200 → 立即 401 → **重启**（2382780 → 2382897）→ 原 cookie 仍 **401** |
+| A6 ★ 未映射角色被拒 | ✅ | 服务器 `dev-login open_id=ou_never_mapped_anywhere` → **403**；`TestTC_M0_02` 另验「绕过登录的既有会话访问受保护入口 → 403」 |
+| A7 权限点注册计数 | ✅ | 库内 **51 / 6 / 306**（迁移日志 ＋ 门禁④ 只读查库两条独立口径） |
+| A8 ★ 后台不能新增权限点 | ✅ | 无该路由（`POST /api/admin/permission-points` → **405**）；字典外 code `PATCH` → **404**；`TestTC_M0_09` 另验库内仍 51 |
+| A9 ★ 每点至少一处消费 | ✅ | `check_perm_registry.py` ① 判据通过；报红能力由 `--selftest` 样本 `unused_point` 自证（Go 侧 `TestTC_M0_08` 持续跑它） |
+| A10 审计有记录 | ✅ | 服务器 PATCH `md.customer` 启停 → 审计接口可见 `action=status`、`old→new`、`reason=批1验收 A10`；`TestTC_M0_10` 在库层断言列齐全 |
+| A11 M0 的 TC 全过 | ✅ | **服务器上**跑全套 TC（`JX_TEST_DB=1`，交叉编译 test 二进制）：permission 4 + config 6 + audit 3 + store 6 + httpapi 13 = **32 用例，TOTAL_RC=0**；`TC-M0-01…11` 各有同名测试 |
+
+**③ ★ 单点变异自证（做了 2 处，均还原并核对 SHA256）**
+
+| 变异 | 做法 | 变红证据 | 还原核对 |
+|---|---|---|---|
+| M1（对应 A6） | `internal/store/permission.go` `LevelsFor`：把「无记录 ⇒ 空 ⇒ NONE」改成「无记录 ⇒ ALL」 | 服务器全套 TC：`TestTC_M0_Level_UnionAndDeny` **FAIL**、`TestTC_M0_02_UnmappedRejected` **FAIL**，其余全绿（TOTAL_RC=1） | 还原后 `permission.go` SHA256 前 16 位 = **`314DDC0D9F1950E6`**（与变异前一致） |
+| M2（对应 A4） | `internal/store/{db,session}.go`：会话改**进程内内存 map**（`LoadSession` 不再查库） | ① 测试级：`TestTC_M0_03_SessionSurvivesRestart` **FAIL**（`TestTC_M0_02` 亦 FAIL —— 内存表跨 store 实例不共享，属同一变异的连带效应，如实记录）；② **进程级**：部署变异二进制后「登录 200 → 重启 → 原 cookie **401**」，即 **A4 必红** | 还原后 `session.go` = **`2234C8F7786D5F04`**、`db.go` = **`65AAFDE9D53FF343`**（与基线一致）；复跑全套 TC **TOTAL_RC=0** |
+
+**④ 口径 / 决策（按 COLLAB §2 属我方域，写此备查）**
+
+- ★ **docs/05 落地（环境硬约束）**：本机只做编译 / 纯单测 / 门禁 / 只读探针；DB 集成测试改为**显式 `JX_TEST_DB=1` 才执行**（本机 `go test ./...` 因此是纯单测，未设时 Skip 且给出原因、非静默）；全套 TC 用**交叉编译的 test 二进制在服务器上跑**；迁移 ×2、登录、A4/A5 重启验证全部在服务器。留档说明：docs/05 生效（01:40）**之前**我已在本机跑过 `-migrate`×2 与 smoke（WorkBuddy §5 已如实留档），之后未再在本机 listen / 迁移。
+- ★ **判据②③ 的方案＝「集中注册表」**（三选一里的一种）：受保护入口必须在 `internal/httpapi/server.go` 的路由表里写 `access.RequirePerm(st, permission.XXX)`；门禁静态扫描所有非测试 `.go` 的 `RequirePerm(...)`。**能保证**：写出来的每次调用都指向已登记常量、且非声明文件无 code 字面量。**不能保证**：绕开 `RequirePerm` 自造守卫函数（本门禁不认识它，需 code review / 议题兜底）；对无法静态核验的实参**宁可误红**（直接判 ③）。`permission.Code` 具名类型把「禁裸写」下沉到**编译期**，与门禁构成双保险。
+- **依赖新增（任务包 §6-5 要求说明）**：`github.com/labstack/echo/v4 v4.12.0`（设计定案 §10 定的 Echo v4；**刻意不用 v4.15.4** —— 它要求 go≥1.25、会触发联网下载工具链）＋ `github.com/go-sql-driver/mysql v1.8.1`（任务包 D3 指定，纯 Go 无 cgo）；两者及其传递依赖均已在模块缓存中，`go build` 未新增联网下载。前端 `vue`/`vite` 仅为构建期 devDependencies（`web/`，不进 Go 二进制）。
+- **迁移与种子的两处实现选择**：① `s_permission_point` 以**代码**为准（多出的 code 删除、少的补入）；② `s_role_permission` 只 `INSERT IGNORE` **补齐缺失行** —— 不覆盖后台已改过的 level（批 2 矩阵页要改的正是它）。表数恒 38：**未新增任何表**（迁移状态用「幂等 DDL」表达，不落 `_migrations` 表）。
+- **审计「只增不改」的判据边界（如实说）**：`TestTC_M0_11` 扫描仓库全部非测试 `.go` 与 `.sql`，出现对 `s_audit_log` 的 `UPDATE/DELETE` 即红，并用临时变异文件自证扫描器有牙齿。**不能**覆盖的形态：绕过应用直连库的人肉篡改 —— 冻结的 38 张表里 `s_audit_log` 无哈希列，M0 无法在不改表的前提下检测；若要该能力请开议题（需动 schema）。
+- **A4 验证方法学（重要）**：验证中发现原 `deploy-test-server.sh`「先上传后停进程」会因 **ETXTBSY** 导致**重启根本不发生**（详见 `N-003`，我已按方案修好并实测）。⇒ **验证 A4 必须确认日志里出现「旧进程已停止」＋「已启动（新 PID）」**，否则 cookie 检查打的是老进程 = 假绿。
+- **前端**：`web/` 是最小可用页面（健康检查 + 身份展示），业务页面按任务包「明确不做」留给批 2；`npm run build` 产物已提交进 `internal/webui/dist`（二进制自带前端）。
+
+**⑤ 本批开出的新议题**：`N-002`（规格计数 37/38、49/51 不一致）· `N-003`（部署脚本 ETXTBSY，**已修待复核**）· `N-004`（`.env.deploy.example` DSN 未加引号）—— 均为如实上报，**未自改 `spec/` 与 `docs/`**。
+
+---
+
+### N-002 · spec/docs 两处计数与机读件不一致（37 vs 38、49 vs 51）
+
+- **提出方**：mimo
+- **类型**：需求澄清
+- **责任域**：WorkBuddy
+- **背景**：批 1 按任务包口径以 **38 张表 / 51 权限点**验收，但文本里有两处旧计数：① `spec/schema.sql` 首段注释写「共 37 张表」、文末校验注释写「表数应为 37」，而文件内实际 `CREATE TABLE` **38** 条；② `docs/01-设计定案.md` §8.1 表前注释写 `spec/permission-points.json`「含 **49** 个权限点、6 个角色」，机读件实际 **51**（46 业务 + 5 管理域，与 §8.4「共 51 项」及 `spec/verify_permission_points.py` 实测一致）。
+- **我方立场**：以**机读件实际内容**为准（38 / 51）；`spec/` 与 `docs/` 是你的域，我**不改**，只开议题。
+- **建议方案**：纯文字更正三处数字（37→38 两处、49→51 一处），不动任何列语义、不动授权矩阵；改完 `bash scripts/check_all.sh` 自然全绿（现有门禁按实际内容计数，不读这几个数字）。
+- **制度影响面**：零 —— 不改列、不改码、不改权限点语义；只消除「注释与实际相反」的误导。
+- **状态**：OPEN
+- **最后更新**：2026-10-09 02:22
+
+### N-003 · deploy-test-server.sh「先上传后停进程」⇒ ETXTBSY ⇒ 重启不发生（A4 假绿风险）
+
+- **提出方**：mimo
+- **类型**：技术方案
+- **责任域**：mimo
+- **背景**：原脚本顺序是 `[3/4] scp 上传` → `[4/4] 停旧进程再启动`。旧进程正在执行 `bin/jxlabtrace` 时 scp 对该文件做 O_TRUNC ⇒ Linux 返回 **ETXTBSY（Text file busy）** ⇒ `scp: dest open ... Failure` ⇒ `set -e` 中断 ⇒ **重启根本没发生**。实测留档：2026-10-09 02:07–02:15，服务已运行时连续两次 `--restart` 均在 `[3/4]` 失败（进程 PID 一直没变），其后的 cookie 检查实际打在**未重启**的进程上 —— 这正是「看起来在验、实际没验」的形态。
+- **我方立场**：必须修脚本本身，不能靠「验的人记得先手动 kill」这种自觉。
+- **建议方案**：**已按此方案修好（见本议题回执）**：在 `[3/4]` 上传**之前**新增 `[2.5/4]`，当 `--restart` 时先按 `run.pid` 停旧进程（只动自己的进程，不碰 jxapproval/RustFS/hnyc-erp），`[4/4]` 原逻辑保留兜底。实测复证：服务运行中 `--restart` ⇒ 输出「旧进程已停止（PID 2383224）」⇒ 上传成功 ⇒「已启动（PID 2383332）」⇒ smoke `http=200`。★ 请 WorkBuddy 复核 `scripts/deploy-test-server.sh` 的 diff；若不认可可回退本修改。
+- **制度影响面**：不触碰任何规格/业务语义；属实现类工具（COLLAB §2：脚本实现归 mimo），改动已在本台账留痕。
+- **状态**：OPEN
+- **最后更新**：2026-10-09 02:22
+
+### N-004 · `.env.deploy.example` 的 DSN 值未加引号 ⇒ `source` 时被 `&` 打断
+
+- **提出方**：mimo
+- **类型**：需求澄清
+- **责任域**：WorkBuddy
+- **背景**：模板里 `JX_DB_DSN=...?charset=utf8mb4&parseTime=true&loc=Local` **未加引号**，而 `deploy-test-server.sh` 用 `set -a; . ./.env` 载入 —— bash 把 `&` 当控制符，DSN 赋值落到后台子 shell 而丢失（服务器实测：`printf 'A=abc&def=1' > t.env; . t.env` ⇒ A 为空），`parseTime=true`、`loc=Local` 还被当成独立赋值泄漏进环境。当前**没炸**的原因有二：我本机生成的 `.env.deploy` 已手工加双引号；且服务进程启动时会自己读 `.env` 兜底（`config.LoadDotEnv`，带引号值会被正确去引）。⇒ 属「靠兜底活着」的潜在坑。
+- **我方立场**：模板应自带正确写法，不依赖下游兜底。
+- **建议方案**：模板所有取值统一写成 `KEY="value"`（尤其含 `&`/`?` 的 DSN），并加一行注释「值含 `&` 必须加双引号」。我方 `config.LoadDotEnv` 已兼容带引号值，无需改代码。
+- **制度影响面**：零 —— 只改 `.env.deploy.example` 文案（不入库的本地配置模板），不动规格与业务语义。
+- **状态**：OPEN
+- **最后更新**：2026-10-09 02:22
 
 ---
 
