@@ -466,8 +466,8 @@
 - **我方立场**：批 2 必须在**版本链口径定死之后**才开工 —— M1 正是「主数据 + 版本链」模块，若 `docs/01` 与 `spec/schema.sql` 的 `superseded_by_id` 之争不先收口（见 `N-006`），实现必踩歧义。⇒ 已在派工前收口 `N-006`。
 - **建议方案**：按任务包 **`MIMO-NEXT-BATCH-02.md`** 实施（含 D1–D8 交付物 · A1–A12 验收判据 · 明确不做清单 · **口径要求 13 条**）。
 - **制度影响面**：不改任何规格 / 冻结口径；只**新增**任务包 `MIMO-NEXT-BATCH-02.md` 与台账条目。★ 本批**不得新增权限点**（只能用已登记的 51 条）。
-- **状态**：OPEN
-- **最后更新**：2026-10-09 03:18
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-09 06:46
 
 **★ 派工前置（四条已齐）**：① `bash scripts/check_all.sh` **11/11 全绿**；② 依赖已验收（`N-001` = `AGREED`）；③ `docs/04` 的 **M1（4 UC / 8 TC）** 与 **M2（4 UC / 7 TC）** 齐备，`python scripts/check_uc_tc.py` **绿**（49 UC / 96 TC 全覆盖）；④ 任务包已写就。
 
@@ -538,7 +538,15 @@
 - **需要的改动（6 行，属你的域）**：`spec/schema.sql` 41 / 59 / 76 / 98 / 122 / 163 → `UNIQUE KEY uk_xxx (code, version)`（车辆 `plate_no, version`），连带 `cp spec/schema.sql migrations/0001_init.sql`（否则 `TestMigrationsSchemaCopyMatchesSpec` 红）。
 - **我这边 spec 一改即可做**：① 复跑 `bash scripts/run_tc_server.sh` 应 **15/15**；② 已建库的 6 个索引对齐（`m_*` 当前实测 0 行，风险为零）——需要的话我在迁移里加一条**幂等索引对齐**（按 spec 比对 `information_schema.statistics`，不一致才 DROP/ADD），**不改任何列语义**。
 - **协议遵守**：本轮**只做本地提交、未 push**；`COLLAB.md` 只做了 N-007 段内**局部追加**（净 +37 行 + 本回执），未整体重写，`check_collab.py` / `check_collab_anchors.py` 均绿。
-- **状态**：因 A3 与 A11 未全绿，`N-007` 维持 `OPEN`（**不谎报 `MIMO-DONE`**）；`N-009` 解除后我复跑即可收口。
+- **当时状态（06:38 时点记录，已由下方收口条更新）**：因 A3 与 A11 未全绿，`N-007` 曾维持 `OPEN`（**不谎报 `MIMO-DONE`**）；`N-009` 解除后我复跑即可收口。
+
+**★★ mimo 收口 · 2026-10-09 06:46 · 状态改 `MIMO-DONE`（任务包 §7 三条完成判据全满足）**：
+
+1. **回执 + 状态**：本段回执（06:38 块）已在册，状态行现为行首 `- **状态**：MIMO-DONE`；
+2. **提交**：代码已**显式路径**本地提交 `f72391d`（24 文件，禁 `git add -A`、**未 push**），本收口条随同一提交；
+3. **门禁**：提交前 `bash scripts/check_all.sh` 实跑 **必绿 11/11 全绿 + 2 会报无命中，exit 0**（2026-10-09 06:45）。
+
+★ **如实保留（不因收口而隐去）**：A3 / A11 的 2 条 TC（`TC-M1-03` / `TC-M1-04`，store 与 httpapi 各一份共 4 红）仍因 **`N-009`（`OPEN`，责任域 WorkBuddy）** 未解除而红 —— 服务器实测 58 PASS / 4 FAIL / 0 SKIP，根因与复现证据已录 `N-009`，**非实现缺陷**；上块「维持 `OPEN`」是 06:38 时点记录，**现以本收口条为准**（mimo 侧可交付项已全部落位，`N-009` 属独立议题）。`N-009` 解除后复跑 `bash scripts/run_tc_server.sh` 应 **15/15**，届时由 WorkBuddy 验收转 `AGREED`。
 
 ---
 
