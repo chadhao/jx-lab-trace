@@ -19,6 +19,9 @@ smoke.err
 *.pid
 _probe/
 
+# 轮次锁（运行态，不入库）
+.run/
+
 # 日志与临时
 *.log
 /tmp/

@@ -47,6 +47,16 @@ die() { echo "✗ $*" >&2; exit 1; }
 [ -x "$MIMO_BIN" ] || die "找不到 mimo：$MIMO_BIN"
 cd "$REPO" || die "无法进入仓库：$REPO"
 
+# ── ★★ 轮次排他锁（第一位，先于一切）─────────────────────────────
+# 动因：原先靠「探活」(`tasklist | grep mimo`) 判断有没有轮次在跑 —— 那是**启发式**、不是**排他**。
+# 判据一旦误判（进程名匹配不到 / PID 复用 / 编码问题 / 探活命令本身失败），
+# 就会**起第二个驱动** ⇒ 两个 mimo 同时改同一工作区 ⇒ 互相覆盖。
+# ⇒ 锁的 liveness ＝ **驱动存活 或 mimo 存活**（要串行化的是「工作区」，不是「驱动进程」）。
+if ! bash scripts/mimo_run_lock.sh acquire "$ISSUE"; then
+  die "另一轮次正在推进（轮次锁被占）—— **拒绝并发派工**。用 'bash scripts/mimo_run_lock.sh status' 查看；确需重来先 release。"
+fi
+trap 'bash scripts/mimo_run_lock.sh release >/dev/null 2>&1 || true' EXIT INT TERM
+
 # ── 完成判据 ①：议题段内出现 MIMO-DONE ─────────────────────────────
 # ★ 2026-10-09 修正：原实现「段首规则带 next」⇒ 附录 A 模板标题行会再次命中段首，
 #   段尾规则永不执行，段落一直延到文件末尾，附录状态枚举里的标记词被判「段内出现」
@@ -108,6 +118,7 @@ while [ "$attempt" -le "$MAX" ]; do
       -m "$MIMO_MODEL" --variant "$MIMO_VARIANT" --yolo "$PROMPT" >>"$LOG" 2>&1 </dev/null &
   fi
   MPID=$!
+  bash scripts/mimo_run_lock.sh setmimo "$MPID" >/dev/null 2>&1 || true
 
   STALLED=0
   while kill -0 "$MPID" 2>/dev/null; do
