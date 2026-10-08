@@ -61,6 +61,8 @@
 2. **提交代码**（显式路径，禁止 `git add -A`）；
 3. 提交前 `bash scripts/check_all.sh` **全绿**。
 
+★ **远端已接**（`origin` = `git@github.com:chadhao/jx-lab-trace.git`，分支 `main`）：★ **你只做本地提交，不要 push** —— **推送由 WorkBuddy 在独立验收通过后执行**（对应用户「由你测试推送」）。
+
 ★ **注意**：命令返回 ≠ 任务完成。**以客观产物为准：台账回执 + 提交 + 门禁绿。**
 
 ## 可做 / 不可做
@@ -69,6 +71,7 @@
 
 **不可做**：
 - ❌ 改 `spec/*.json` / `spec/schema.sql` / `docs/*`（**那是 WorkBuddy 域**）—— 需要改就开议题；
+- ❌ `git push`（推送由 WorkBuddy 在验收通过后执行）；
 - ❌ 改 `COLLAB.md` 中**别人写过**的内容；
 - ❌ 跳过或注释掉失败测试；
 - ❌ `git add -A`；
