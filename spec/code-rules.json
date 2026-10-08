@@ -1,0 +1,147 @@
+{
+  "spec": "jx-lab-trace.tracking-code",
+  "spec_version": 1,
+  "frozen_at": "2026-10-08",
+  "status": "frozen",
+  "source_doc": "docs/02-追踪码规则.md",
+  "note": "追踪码机读规格。供代码生成/解析与门禁消费。v1 已冻结，变更须走版本位(V)流程。",
+
+  "alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+
+  "length": {
+    "payload": 26,
+    "check": 1,
+    "total": 27
+  },
+
+  "check_algorithm": {
+    "algorithm": "weighted_mod",
+    "modulus": 36,
+    "direction": "right_to_left",
+    "weights": [1, 3],
+    "note": "从右向左：第1位(最右)权1、第2位权3、交替。S=Σ 值(cᵢ)×权ᵢ，值取字母表下标(0-9→0-9, A-Z→10-35)。校验字符 = 字母表[S mod 36]。可检出全部相邻换位(变化量 ±2×(v₁−v₂))；单字符替换漏检率≈1/36≈2.86%。不防伪造。"
+  },
+
+  "segments": [
+    { "key": "V", "name": "编码版本", "width": 1, "pattern": "[1-9]", "source": "常量" },
+    { "key": "T", "name": "对象类型", "width": 1, "pattern": "[ABCDE]", "source": "系统" },
+    { "key": "BT", "name": "业务类型", "width": 2, "enum": ["CG", "ZG"], "source": "用户选", "note": "CG=客供(受托加工)，ZG=自购" },
+    { "key": "CUSTOMER", "name": "客户编号", "width": 4, "pattern": "[0-9]{4}", "source": "主数据", "note": "自购料(ZG)填保留值 0000" },
+    { "key": "MATERIAL", "name": "物料编号", "width": 4, "pattern": "[0-9]{4}", "source": "主数据", "note": "原料对象填原料物料；成品对象填成品物料" },
+    { "key": "DATE", "name": "链根日期", "width": 6, "pattern": "[0-9]{6}", "format": "YYMMDD", "source": "系统", "note": "原料链=到货日；成品链=生产批创建日" },
+    { "key": "SEQ1", "name": "序1·第1层", "width": 2, "pattern": "[0-9]{2}", "source": "系统" },
+    { "key": "SEQ2", "name": "序2·第2层", "width": 3, "pattern": "[0-9]{3}", "source": "系统" },
+    { "key": "SEQ3", "name": "序3·第3层", "width": 3, "pattern": "[0-9]{3}", "source": "系统" }
+  ],
+
+  "object_types": {
+    "A": { "name": "车次", "chain": "原料链", "depth": 1, "material_slot": "原料物料", "seq1": "车序", "seq2": "000", "seq3": "000" },
+    "B": { "name": "原料吨袋", "chain": "原料链", "depth": 2, "material_slot": "原料物料", "seq1": "车序", "seq2": "袋序", "seq3": "000" },
+    "C": { "name": "生产批", "chain": "成品链", "depth": 1, "material_slot": "成品物料(计划产出)", "seq1": "批序", "seq2": "000", "seq3": "000" },
+    "D": { "name": "成品批", "chain": "成品链", "depth": 2, "material_slot": "成品物料", "seq1": "来源生产批序", "seq2": "该生产批内第n个成品批", "seq3": "000" },
+    "E": { "name": "成品吨袋", "chain": "成品链", "depth": 3, "material_slot": "成品物料", "seq1": "来源生产批序", "seq2": "成品批序", "seq3": "袋序" }
+  },
+
+  "key_rule": "序段表达的是「从链根到本对象」的完整路径，不是本对象自己的流水。原料链只有 2 层故 SEQ3 恒 000；成品链有 3 层。",
+
+  "sequence_spaces": [
+    { "key": "车序", "used_by": "A.seq1, B.seq1", "scope": "客户 + 原料物料 + 到货日", "width": 2, "max": 99 },
+    { "key": "袋序", "used_by": "B.seq2", "scope": "车内", "width": 3, "max": 999 },
+    { "key": "批序", "used_by": "C.seq1", "scope": "客户 + 成品物料 + 生产批创建日", "width": 2, "max": 99 },
+    { "key": "成品批序", "used_by": "D.seq2, E.seq2", "scope": "生产批内", "width": 3, "max": 999 },
+    { "key": "成品袋序", "used_by": "E.seq3", "scope": "成品批内", "width": 3, "max": 999 }
+  ],
+
+  "rules": {
+    "gap_number_reuse": false,
+    "auto_carry_on_overflow": false,
+    "other_side_placeholder": "000",
+    "concurrent_alloc": "must_serialize_in_transaction",
+    "uniqueness": "db_unique_index",
+    "forecast_edit_changes_vehicle_seq": false,
+    "note": "空号跳号不回收；超限明确报错由人决策(自动进位会破坏定长)；并发取号必须在同一事务内完成，禁止'先查最大值再+1'。"
+  },
+
+  "code_faces": {
+    "qrcode_content": "payload+check，共 27 位，无分隔符",
+    "human_line": "带分隔符的全码，与裸串严格同构、可双向转换；人读行中全零段用浅色小字但仍印出",
+    "human_groups": [2, 2, 4, 4, 6, 2, 3, 3, 1],
+    "human_groups_note": "人读行的分组宽度，共 27 位。★ 注意：与 segments 的分组【不同】—— 人读行把 V(版本) 与 T(对象类型) 合并成 2 位的「对象头」，读作 1A / 1B / 1E 比 1-A 更自然。此分组是显示格式的一部分，必须显式声明，否则人读行与裸串无法严格互转。",
+    "manual_entry": "不设独立短码；手输走『先选父对象，再输本层序号』"
+  },
+
+  "label": {
+    "material": "热转印/热敏不干胶",
+    "qr_error_correction": "M",
+    "qr_min_size_mm": 20,
+    "print_path": "服务端生成标签版式页 -> 浏览器打印到标签机（一期不写打印驱动）",
+    "reprint_requires_reason": true
+  },
+
+  "generation": {
+    "A": "到货确认时",
+    "B": "过磅确认后按实际袋数批量生成（不按预报袋数预打）",
+    "C": "建生产批时",
+    "D": "生成成品批时",
+    "E": "生成成品袋时"
+  },
+
+  "parse_steps": [
+    "长度 != 27 -> 拒绝",
+    "V 不在 [1-9] -> 拒绝",
+    "T 不在 [ABCDE] -> 拒绝",
+    "校验位不匹配 -> 拒绝（提示『码可能读错，请重扫』）",
+    "按 V 取规则版本、按 T 取布局 -> 切分各段",
+    "按 客户+物料+日期+序段 定位对象；命中 -> 打开；未命中 -> 明确提示『格式正确但系统内不存在』"
+  ],
+
+  "sample_vectors": [
+    {
+      "object": "A", "object_name": "车次",
+      "meaning": "客户0001 客供 原料0002 2026-10-07 当日第3车",
+      "payload": "1ACG0001000226100703000000",
+      "weighted_sum": 93, "remainder": 21, "check": "L",
+      "full": "1ACG0001000226100703000000L",
+      "human": "1A-CG-0001-0002-261007-03-000-000-L"
+    },
+    {
+      "object": "B", "object_name": "原料吨袋",
+      "meaning": "上述车次的第7袋",
+      "payload": "1BCG0001000226100703007000",
+      "weighted_sum": 115, "remainder": 7, "check": "7",
+      "full": "1BCG00010002261007030070007",
+      "human": "1B-CG-0001-0002-261007-03-007-000-7"
+    },
+    {
+      "object": "C", "object_name": "生产批",
+      "meaning": "客户0001 客供 成品物料0003 2026-10-07 当日第3批",
+      "payload": "1CCG0001000326100703000000",
+      "weighted_sum": 96, "remainder": 24, "check": "O",
+      "full": "1CCG0001000326100703000000O",
+      "human": "1C-CG-0001-0003-261007-03-000-000-O"
+    },
+    {
+      "object": "D", "object_name": "成品批",
+      "meaning": "生产批03的第2个成品批",
+      "payload": "1DCG0001000326100703002000",
+      "weighted_sum": 103, "remainder": 31, "check": "V",
+      "full": "1DCG0001000326100703002000V",
+      "human": "1D-CG-0001-0003-261007-03-002-000-V"
+    },
+    {
+      "object": "E", "object_name": "成品吨袋",
+      "meaning": "上述成品批的第15袋",
+      "payload": "1ECG0001000326100703002015",
+      "weighted_sum": 112, "remainder": 4, "check": "4",
+      "full": "1ECG00010003261007030020154",
+      "human": "1E-CG-0001-0003-261007-03-002-015-4"
+    }
+  ],
+
+  "sample_number_rule": {
+    "format": "父对象码 + '-' + 角色码 + 2位序号",
+    "roles": { "I": "份样", "C": "大样", "R": "保留样", "A": "仲裁样" },
+    "example": "1B-CG-0001-0002-261007-03-007-R01 = 该吨袋的 1 号保留样",
+    "not_in_27bit_system": true
+  }
+}
