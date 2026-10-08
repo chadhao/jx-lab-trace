@@ -95,9 +95,18 @@ green       "go vet ./..."            "$GO" vet ./...
 green       "go test ./... -count=1"  "$GO" test ./... -count=1
 green       "md 表格列数门禁"          "$PY" scripts/check_md_tables.py
 green       "COLLAB 协商台账门禁"      "$PY" scripts/check_collab.py
+# ★ 2026-10-09 新增（实测事故驱动）：`COLLAB.md` **我方关键内容存在性**门禁。
+#   事故：mimo 整体重写该文件（做 markdown 格式化），底本是它早先读到的旧版本
+#   ⇒ 把 WorkBuddy 之后追加的内容全部冲掉（净删 97 行）。⇒ 把「我方内容不可被删」变成
+#   **机检断言**：任何人跑 check_all.sh 都立刻看见红。
+green       "台账我方锚点门禁"          "$PY" scripts/check_collab_anchors.py
 green       "用例↔测试用例覆盖门禁"    "$PY" scripts/check_uc_tc.py
 green       "追踪码规格自校验"         "$PY" spec/verify_code_rules.py
 green       "权限点规格自校验"         "$PY" spec/verify_permission_points.py
+# ★ 批 1 交付（MIMO-NEXT-BATCH-01 D8 / A9）：权限点「注册 ⇄ 消费」四判据门禁
+#   ① 每个 spec code 至少被代码消费 ② 代码里的权限点标识必须已登记
+#   ③ 受保护入口禁裸写字符串 ④ seed 与库内 s_role_permission 行数一致（含查库）
+green       "权限点注册一致性门禁"     "$PY" scripts/check_perm_registry.py
 echo
 echo "[会报既存问题]（不阻塞）"
 report      "md 结构与一致性门禁"      "$PY" scripts/check_md_structure.py
