@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# drive_mimo.next.sh —— drive_mimo.sh 的**下一版**：在原有三条完成判据之上，
-#                       增加【内置停滞看门狗】。
+# drive_mimo.sh —— 驱动 mimo code 完成一轮交办：**三条完成判据 ＋ 轮次排他锁 ＋ 停滞看门狗**
+#   （★ 本文件即原 `drive_mimo.next.sh`，已于 2026-10-09 安装为正式驱动；`next` 版已合并删除。）
 #
 # ★ 为什么要它（2026-10-08 实测教训）：
 #   原版把 `mimo run` **前台阻塞**地跑 ⇒ 一旦 mimo 卡住（进程活着、但日志停止增长、
