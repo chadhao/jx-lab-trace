@@ -1,64 +1,82 @@
 #!/usr/bin/env bash
-# drive_mimo.sh —— 驱动 mimo code 完成一轮交办：**目标判据 ＋ 中断自动续跑**
+# drive_mimo.next.sh —— drive_mimo.sh 的**下一版**：在原有三条完成判据之上，
+#                       增加【内置停滞看门狗】。
 #
-# ★ 核心教训（沿用自上一个项目的实测）：mimo 执行到一半会 **interrupt** —— 命令行**正常返回、退出码 0**，
-#   看起来"跑完了"，而工作其实只做了一半。⇒ **命令返回 ≠ 任务完成**，必须改判据：**看客观产物，不看进程退出**。
+# ★ 为什么要它（2026-10-08 实测教训）：
+#   原版把 `mimo run` **前台阻塞**地跑 ⇒ 一旦 mimo 卡住（进程活着、但日志停止增长、
+#   也没有任何外连），驱动会**一直等下去**。实测那次**空转 6 小时**，
+#   直到人工发现才终止 —— 而两条完成判据（新提交 / 门禁绿）在"还没改"时**永远是同一个值**，
+#   它们**表达不了"卡住"**。
+#   ⇒ ★ 修法：把 `mimo run` 放后台，驱动**每分钟轮询日志是否还在增长**；
+#     超过 `STALL_SECS` 仍无增长 ⇒ 判定停滞 ⇒ **杀掉并进入下一次尝试**（自动重试）。
 #
-# 用法：
+# ★ 判据设计（避免误杀）：
+#   只有 **① 日志静止 > STALL_SECS** 且 **② 进程仍存活** 才判停滞。
+#   进程已退出 ⇒ 那是「本轮结束」，正常进入三条判据的评估。
+#
+# 用法（与原版一致）：
 #   bash scripts/drive_mimo.sh <议题ID> <指令文件> [最大尝试次数]
-# 例：
-#   bash scripts/drive_mimo.sh N-001 MIMO-NEXT-BATCH-01.md 5
-#
-# 完成判据（三条**全满足**才算完成，缺一即续跑）：
-#   ① 台账：COLLAB.md 的该议题段内出现 `MIMO-DONE`
-#   ② 提交：HEAD 已越过本次基线，**且最新提交的 subject 不以 `[WorkBuddy]` 开头**（排除我方提交）
-#   ③ 门禁：bash scripts/check_all.sh 退出码 0
 #
 # 环境变量：
-#   MIMO_SESSION  会话 id（留空 = 新建会话；★ 首次跑完把新 id 记进 COLLAB.md §1 供后续复用）
+#   MIMO_SESSION  会话 id（留空 = 新建）
 #   MIMO_BIN      mimo 可执行文件路径
 #   MIMO_MODEL    模型 id（默认套餐 provider）
 #   MIMO_VARIANT  推理档（默认 high）
+#   STALL_SECS    日志静止多少秒判「停滞」（默认 900 = 15 分钟）
+#   POLL_SECS     轮询间隔（默认 60）
 set -o pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 MIMO_BIN="${MIMO_BIN:-$HOME/.mimocode/bin/mimo}"
 MIMO_SESSION="${MIMO_SESSION:-}"
-# ★ provider 实测：`xiaomi/`（直连 API）会报 Insufficient account balance ⇒ 用套餐 provider。
 MIMO_MODEL="${MIMO_MODEL:-xiaomi-token-plan-cn/mimo-v2.6-flash}"
 MIMO_VARIANT="${MIMO_VARIANT:-high}"
+STALL_SECS="${STALL_SECS:-900}"
+POLL_SECS="${POLL_SECS:-60}"
 
 ISSUE="${1:?用法: drive_mimo.sh <议题ID> <指令文件> [最大尝试次数]}"
 PROMPT_FILE="${2:?缺少指令文件}"
 MAX="${3:-5}"
 LOG="${LOG:-/tmp/drive_mimo_${ISSUE//[^A-Za-z0-9]/_}.log}"
 
-# 门禁所需环境（python 与 go 的路径在 Git Bash 下未必在 PATH 里）
 export PY="${PY:-C:/Users/haoduan/.workbuddy/binaries/python/versions/3.13.12/python.exe}"
 export PATH="/c/go/bin:$PATH"
 
 die() { echo "✗ $*" >&2; exit 1; }
 [ -f "$PROMPT_FILE" ] || die "指令文件不存在：$PROMPT_FILE"
 [ -x "$MIMO_BIN" ] || die "找不到 mimo：$MIMO_BIN"
-
 cd "$REPO" || die "无法进入仓库：$REPO"
 
-# ── 完成判据 ①：议题段内出现 MIMO-DONE ─────────────────────────────
+# ── ★★ 轮次排他锁（第一位，先于一切）─────────────────────────────
+# 动因：原先靠「探活」(`tasklist | grep mimo`) 判断有没有轮次在跑 —— 那是**启发式**、不是**排他**。
+# 判据一旦误判（进程名匹配不到 / PID 复用 / 编码问题 / 探活命令本身失败），
+# 就会**起第二个驱动** ⇒ 两个 mimo 同时改同一工作区 ⇒ 互相覆盖。
+# ⇒ 锁的 liveness ＝ **驱动存活 或 mimo 存活**（要串行化的是「工作区」，不是「驱动进程」）。
+if ! bash scripts/mimo_run_lock.sh acquire "$ISSUE"; then
+  die "另一轮次正在推进（轮次锁被占）—— **拒绝并发派工**。用 'bash scripts/mimo_run_lock.sh status' 查看；确需重来先 release。"
+fi
+trap 'bash scripts/mimo_run_lock.sh release >/dev/null 2>&1 || true' EXIT INT TERM
+
+# ── 完成判据 ①：议题段内的**状态字段**恰为 MIMO-DONE ────────────────
+# ★★ 本判据已两次假绿，两次原因不同（都记在这里，防再犯）：
+#   ① 段边界漏洞：原实现以 `^### ` 断段 + 段首规则带 `next` ⇒ 附录 A 的模板标题再命中段首
+#      ⇒ 段落延伸至文件末尾 ⇒ 附录 B 状态枚举里的标记词被判「段内出现」。（已修：段尾认 `^#`、
+#      段首只认首次。）
+#   ② ★★ **正文里"讨论"了该标记词**：我方在 N-001 段内写的事故记录里，**引用了 `MIMO-DONE` 这个词**
+#      ⇒ 裸词匹配再次命中 ⇒ 判据仍为假绿（而 mimo 其实**没按协议在段内写回执**）。
+#   ⇒ ★★ **可迁移判据：凡"在某范围内查找某标记词"的判据，只要该词会在文档里被【讨论】
+#      而不只是被【使用】，就必然假绿。⇒ 必须匹配【结构化位置】，不能匹配裸词。**
+#   ⇒ 修法：只认**行首恰为 `- **状态**：` 且值为 MIMO-DONE** 的那种行（＝协议规定的写法）。
 section_done() {
-  # ★ 修正（2026-10-09）：原实现「段首规则带 next」⇒ 附录 A 模板标题行
-  #   `### N-001 · <一句话标题>` 会再次命中段首并 next，段尾规则永不执行，
-  #   段落一直延伸到文件末尾，附录状态枚举里的完成标记词随即被判「段内出现」
-  #   ⇒ 判据① 恒真（假绿）。修法：段尾同时认 `## / ###`（任何 `^#` 标题）
-  #   且**先于**段首求值；段首加 `seen` 守卫，**只认首次**出现。
   awk -v id="### $ISSUE" '
     inside && /^#/ { inside = 0 }
     index($0, id) == 1 && !seen { seen = 1; inside = 1; next }
-    inside && /MIMO-DONE/ { found = 1 }
+    inside && /^- \*\*状态\*\*[[:space:]]*[:：][[:space:]]*MIMO-DONE[[:space:]]*$/ { found = 1 }
     END { exit !found }
   ' COLLAB.md
 }
 
-# ── 完成判据 ②：**对方**真的提交了（追加作者校验，防把我方提交算成对方完成）──
+# ── 完成判据 ②：**对方**真的提交了（追加作者校验）──
 mimo_committed() {
   [ "$(git rev-parse HEAD)" != "$BASE" ] || return 1
   case "$(git log -1 --pretty=%s)" in
@@ -70,51 +88,70 @@ mimo_committed() {
 # ── 完成判据 ③：门禁必绿 ──────────────────────────────────────────
 gate_ok() { bash scripts/check_all.sh >/dev/null 2>&1; }
 
-# ── 开工前自检：基线必须绿（红着开工 = 在错误前提上盖楼）──
 if ! gate_ok; then
   die "基线门禁非绿 —— 拒绝交办。请先跑 'bash scripts/check_all.sh' 看清红在哪。"
 fi
 
 BASE="$(git rev-parse HEAD)"
-echo "═══ 驱动 mimo · 议题 $ISSUE ═══"
+echo "═══ 驱动 mimo · 议题 $ISSUE（含停滞看门狗）═══"
 echo "仓库     : $REPO"
 echo "会话     : ${MIMO_SESSION:-<新建>}"
 echo "基线 HEAD: $BASE"
 echo "日志     : $LOG"
+echo "停滞阈值 : ${STALL_SECS}s（轮询 ${POLL_SECS}s）"
 echo
+
+log_mtime() { stat -c %Y "$LOG" 2>/dev/null || echo 0; }
+now_ts()    { date +%s; }
 
 attempt=1
 while [ "$attempt" -le "$MAX" ]; do
   if [ "$attempt" -eq 1 ]; then
     PROMPT="$(cat "$PROMPT_FILE")"
   else
-    PROMPT="继续 $ISSUE 未完成的项。★★ 已完成的项**不要重做**。完成判据（三条全满足）：① COLLAB.md 的 $ISSUE 段内写回执且状态改 MIMO-DONE；② 提交代码（**显式路径，禁止 git add -A**）；③ 提交前跑 bash scripts/check_all.sh 必绿全绿。★ 若中途被打断，直接从断点继续。"
+    PROMPT="继续 $ISSUE 未完成的项。★★ 已完成的项**不要重做**。完成判据（三条全满足）：① COLLAB.md 的 $ISSUE 段内写回执且状态改 MIMO-DONE；② 提交代码（**显式路径，禁止 git add -A**）；③ 提交前跑 bash scripts/check_all.sh 必绿全绿。★ 若上一轮被打断，直接从断点继续。"
   fi
 
   echo "── 第 $attempt/$MAX 次 ──"
-  {
-    echo; echo "════════ attempt $attempt · $(date '+%F %T') ════════"
-  } >> "$LOG"
+  { echo; echo "════════ attempt $attempt · $(date '+%F %T') ════════"; } >> "$LOG"
 
-  # ★ 有意**不看退出码** —— 返回 0 不代表完成（见文件头）
+  # ★ 后台跑 mimo（不再前台阻塞），以便并行做停滞监控
   if [ -n "$MIMO_SESSION" ]; then
     "$MIMO_BIN" run -s "$MIMO_SESSION" --dir "$REPO" \
-      -m "$MIMO_MODEL" --variant "$MIMO_VARIANT" --yolo "$PROMPT" >>"$LOG" 2>&1 </dev/null
+      -m "$MIMO_MODEL" --variant "$MIMO_VARIANT" --yolo "$PROMPT" >>"$LOG" 2>&1 </dev/null &
   else
     "$MIMO_BIN" run --dir "$REPO" \
-      -m "$MIMO_MODEL" --variant "$MIMO_VARIANT" --yolo "$PROMPT" >>"$LOG" 2>&1 </dev/null
+      -m "$MIMO_MODEL" --variant "$MIMO_VARIANT" --yolo "$PROMPT" >>"$LOG" 2>&1 </dev/null &
   fi
+  MPID=$!
+  bash scripts/mimo_run_lock.sh setmimo "$MPID" >/dev/null 2>&1 || true
 
-  # ── 逐条判据，**缺哪条就报哪条**（可见失败，不许静默续跑）──
+  STALLED=0
+  while kill -0 "$MPID" 2>/dev/null; do
+    sleep "$POLL_SECS"
+    kill -0 "$MPID" 2>/dev/null || break
+    idle=$(( $(now_ts) - $(log_mtime) ))
+    if [ "$idle" -gt "$STALL_SECS" ]; then
+      echo "   ⚠ 停滞：日志已静止 ${idle}s（> ${STALL_SECS}s）而进程仍存活 ⇒ 终止本轮并重试"
+      { echo; echo "[$(date '+%F %T')] ★ 看门狗判定停滞（静止 ${idle}s）—— 终止 PID $MPID"; } >> "$LOG"
+      kill "$MPID" 2>/dev/null
+      sleep 3
+      kill -0 "$MPID" 2>/dev/null && kill -9 "$MPID" 2>/dev/null
+      STALLED=1
+      break
+    fi
+  done
+  wait "$MPID" 2>/dev/null
+
+  # ── 逐条判据，缺哪条报哪条（可见失败，不许静默续跑）──
   ok_sec=0; ok_git=0; ok_gate=0
   section_done && ok_sec=1
   mimo_committed && ok_git=1
   gate_ok && ok_gate=1
-  echo "   判据：台账回执=$ok_sec  新提交=$ok_git  门禁绿=$ok_gate"
+  echo "   判据：台账回执=$ok_sec  新提交=$ok_git  门禁绿=$ok_gate$([ "$STALLED" = 1 ] && echo '  （本轮因停滞被看门狗终止）')"
 
   if [ "$ok_sec" = 1 ] && [ "$ok_git" = 1 ] && [ "$ok_gate" = 1 ]; then
     echo "✓ 完成（第 $attempt 次）· HEAD=$(git rev-parse --short HEAD)"
-    echo "★ 会话 id（下次复用）：$(mimo session list 2>/dev/null | tail -n +2 | head -1 | awk '{print $1}')"
     exit 0
   fi
   attempt=$((attempt + 1))

@@ -55,18 +55,43 @@ ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p ~/$REMOTE_DIR/{bin,logs,attachments} && e
 #   旧进程正在执行 bin/jxlabtrace 时，scp 对该文件 O_TRUNC ⇒ Linux 返回
 #   ETXTBSY（Text file busy）⇒ 上传失败 ⇒ set -e 退出 ⇒ **重启根本没发生**，
 #   「A4 会话跨重启」会因此变成**没有重启的假绿**。实测留档见 N-003。
+#
+# ★★ [2.5/4] 加固（WorkBuddy，2026-10-09，见 COLLAB N-005）：**只在 run.pid 准确时才有效**。
+#   实测反证（N-005 探针 A，2026-10-09 03:1x）：run.pid 陈旧（2383903 已死）而真实监听进程
+#   （2384342，「/proc/<pid>/exe」→ 本目录「bin/jxlabtrace」）仍持有该二进制 ⇒ 旧逻辑打印
+#   「无旧进程」⇒ [3/4] scp 照旧「dest open ... Failure」（ETXTBSY）⇒ set -e 退出。
+#   ★ 触发条件并不罕见：**「A4 会话跨重启」的验收手法本身就是手动 kill + 手动起进程**，
+#     手动起的进程不会回写 run.pid ⇒ 下一次「--restart」必然踩中。
+#   ⇒ 修法：run.pid 无效时**兜底扫描**——按「/proc/<pid>/exe」**路径精确等于**本目录二进制
+#     来判定「该停谁」，**只动自己的进程**，绝不误伤 jxapproval / RustFS / hnyc-erp。
 if [ "$DO_RESTART" = 1 ]; then
-  echo "[2.5/4] 停远端旧进程（只动我们自己的 run.pid，不碰 jxapproval / RustFS / hnyc-erp）"
+  echo "[2.5/4] 停远端旧进程（只动本目录二进制持有者，不碰 jxapproval / RustFS / hnyc-erp）"
   ssh "${SSH_OPTS[@]}" "$HOST" "bash -s" <<REMOTE
 set -u
 cd ~/$REMOTE_DIR
+SELF_BIN="\$HOME/$REMOTE_DIR/bin/$BIN_NAME"
 pid="\$(cat run.pid 2>/dev/null || true)"
 if [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null; then
   kill "\$pid"; sleep 1
   kill -0 "\$pid" 2>/dev/null && kill -9 "\$pid" 2>/dev/null || true
-  echo "旧进程已停止（PID \$pid）"
+  echo "旧进程已停止（PID \$pid，来自 run.pid）"
 else
-  echo "无旧进程"
+  echo "run.pid 无效（值为 '\${pid:-空}'）⇒ 兜底扫描持有本目录二进制的进程"
+  stopped=""
+  for p in /proc/[0-9]*; do
+    kp="\${p#/proc/}"
+    [ "\$kp" = "\$\$" ] && continue
+    exe="\$(readlink "\$p/exe" 2>/dev/null || true)"
+    [ "\$exe" = "\$SELF_BIN" ] || continue
+    kill "\$kp" 2>/dev/null; sleep 1
+    kill -0 "\$kp" 2>/dev/null && kill -9 "\$kp" 2>/dev/null || true
+    stopped="\$stopped \$kp"
+  done
+  if [ -n "\$stopped" ]; then
+    echo "已兜底停止持有 \$SELF_BIN 的进程：\$stopped"
+  else
+    echo "确认无旧进程（无需停止）"
+  fi
 fi
 REMOTE
 fi
@@ -90,6 +115,20 @@ else
   echo "无旧进程"
 fi
 # 起新进程：★ 只绑回环，通过反代对外；不往公网多开端口
+# ★ 载入前先做**语法自检**（WorkBuddy，2026-10-09，见 COLLAB N-005）：
+#   「.env」是被当 shell 片段 source 的，一行写错（实测：DSN 被写成双重引号 ""...""）
+#   会让「. ./.env」报「syntax error near unexpected token」而**失败**；
+#   但旧逻辑只有 set -u、**没有 set -e** ⇒ 其后所有赋值全部落空、服务照旧起来、
+#   「/healthz」照旧 200 ⇒ **配置错误被静默吞掉（假绿）**。
+#   ⇒ 现在：先「bash -n」语法自检，不过就**拒绝启动**（宁可红，不要假绿）。
+# ★★ 注意：本文件的两处 heredoc 均为**不加引号**的 <<REMOTE ⇒ heredoc 体内
+#   **反引号与未转义的美元符会在【本机】被执行/展开**（实测踩坑：注释里的反引号
+#   被本机当命令替换跑掉，连带把远端脚本搞花）。⇒ 注释里一律用「」，不要用反引号。
+if ! bash -n ./.env 2>/tmp/.jx_env_syntax.err; then
+  echo "!!! ./.env 语法自检未通过 —— 拒绝以错误配置启动：" >&2
+  cat /tmp/.jx_env_syntax.err >&2
+  exit 1
+fi
 set -a; . ./.env; set +a
 export JX_HTTP_ADDR="\${JX_HTTP_ADDR:-127.0.0.1:$PORT}"
 export JX_ATTACH_DIR="\${JX_ATTACH_DIR:-$PWD/attachments}"
@@ -109,7 +148,11 @@ if [ "$DO_SMOKE" = 1 ]; then
   ssh "${SSH_OPTS[@]}" "$HOST" "bash -s" <<REMOTE
 set -u
 cd ~/$REMOTE_DIR
-ADDR="\$(grep -E '^JX_HTTP_ADDR=' .env 2>/dev/null | cut -d= -f2-)"; ADDR="\${ADDR:-127.0.0.1:$PORT}"
+# ★ N-004 联动（WorkBuddy，2026-10-09）：模板现已要求取值一律加双引号 ⇒ 这里**必须先剥引号**，
+#   否则 \`cut -d= -f2-\` 会带上字面引号，拼出 \`http://"127.0.0.1:18080"/healthz\` 而 curl 解析失败。
+#   tr 用八进制转义（\042=" / \047='）书写，避免在 heredoc 里出现字面引号。
+ADDR="\$(grep -E '^[[:space:]]*JX_HTTP_ADDR[[:space:]]*=' .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\\042\\047' | tr -d '[:space:]')"
+ADDR="\${ADDR:-127.0.0.1:$PORT}"
 echo "--- /healthz ---"
 curl -s -m 5 -o /dev/null -w 'http=%{http_code}\n' "http://\$ADDR/healthz" || echo "curl 失败"
 curl -s -m 5 "http://\$ADDR/healthz" | head -c 400; echo
