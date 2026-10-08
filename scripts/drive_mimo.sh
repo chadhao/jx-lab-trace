@@ -45,9 +45,14 @@ cd "$REPO" || die "无法进入仓库：$REPO"
 
 # ── 完成判据 ①：议题段内出现 MIMO-DONE ─────────────────────────────
 section_done() {
+  # ★ 修正（2026-10-09）：原实现「段首规则带 next」⇒ 附录 A 模板标题行
+  #   `### N-001 · <一句话标题>` 会再次命中段首并 next，段尾规则永不执行，
+  #   段落一直延伸到文件末尾，附录状态枚举里的完成标记词随即被判「段内出现」
+  #   ⇒ 判据① 恒真（假绿）。修法：段尾同时认 `## / ###`（任何 `^#` 标题）
+  #   且**先于**段首求值；段首加 `seen` 守卫，**只认首次**出现。
   awk -v id="### $ISSUE" '
-    index($0, id) == 1 { inside = 1; next }
-    inside && /^### /   { inside = 0 }
+    inside && /^#/ { inside = 0 }
+    index($0, id) == 1 && !seen { seen = 1; inside = 1; next }
     inside && /MIMO-DONE/ { found = 1 }
     END { exit !found }
   ' COLLAB.md
