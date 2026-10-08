@@ -1,0 +1,17 @@
+# 构建产物
+bin/
+*.exe
+
+# 前端依赖与中间产物（★ internal/webui/dist 要入库 —— 它被 //go:embed 内嵌进二进制）
+web/node_modules/
+web/dist/
+.mimocode/node_modules/
+
+# 密钥与本地配置
+.env
+.env.local
+*.local
+
+# 日志与临时
+*.log
+/tmp/
