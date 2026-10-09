@@ -753,9 +753,11 @@ func TestTC_M5_10_HTTP_UrgentReleaseInitApproveSplit(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("紧急放行发起应 200，实际 %d body=%v", resp.StatusCode, out)
 	}
-	// 未发起先审批（另一对象）⇒ 409
+	// 未发起先审批（另一对象）⇒ 409 —— 必须用**有 approve 权限**的 management 过权限层，
+	// 否则被 qc=NONE 在权限层先拦 403，走不到服务层的 ErrUrgentNotInit。
+	mgmtCK := e.login(m5MgmtOpenID)
 	truckB, _ := m5Truck(t, e, ck, cust, mat)
-	resp, out = e.do("POST", "/api/insp/urgent-release/approve", ck,
+	resp, out = e.do("POST", "/api/insp/urgent-release/approve", mgmtCK,
 		fmt.Sprintf(`{"entity":"b_truck_lot","entity_id":%d}`, truckB))
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("★ 未发起先审批应 409，实际 %d body=%v", resp.StatusCode, out)
@@ -767,7 +769,6 @@ func TestTC_M5_10_HTTP_UrgentReleaseInitApproveSplit(t *testing.T) {
 		t.Fatalf("★ qc 走审批入口应 403（权限层），实际 %d body=%v", resp.StatusCode, out)
 	}
 	// management（APPROVE）审批他人发起的 ⇒ 200
-	mgmtCK := e.login(m5MgmtOpenID)
 	resp, out = e.do("POST", "/api/insp/urgent-release/approve", mgmtCK,
 		fmt.Sprintf(`{"entity":"b_truck_lot","entity_id":%d,"reason":"同意"}`, truckA))
 	if resp.StatusCode != http.StatusOK {
