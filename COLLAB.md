@@ -664,13 +664,90 @@
 - **制度影响面**：**不动任何冻结口径** —— `spec/code-rules.json`（v1 已冻结）· `spec/schema.sql`（38 表）· `spec/permission-points.json`（51 点 × 6 角色 = 306 行）**均不改**；本批只**新增消费端**（8 个 `recv.*` 权限点）与业务实现。★ 若实现中发现规格有矛盾 ⇒ **开议题，不自改规格**（判例：`N-009`）。
 - **★ 已交齐的前置（无需 mimo 再问）**：M3 的 8 个权限点（`recv.notice.create` / `recv.notice.edit` / `recv.arrive.confirm` / `recv.weigh` / `recv.bag.gen` / `recv.label.print` / `recv.label.reprint` / `recv.return`）**已在 `spec/permission-points.json` 登记**；5 张业务表（`b_arrival_notice` / `b_truck_lot` / `b_bag` / `b_label_print` / `b_obj_void`）**已在 `spec/schema.sql` 建好**；5 条码示例向量**已核算过校验位**并由 `spec/verify_code_rules.py` 自校验。
 - **★ 我方已先行指出的两处易错点（已写入任务包 §6）**：① **车序在预报阶段只有普通 KEY 不是 UNIQUE**（`idx_notice_seq`）⇒ 并发取号正确性**必须由「同事务串行」自己保证**，不能依赖 DB 兜底；若认为需要 DB 级唯一约束 ⇒ 开议题。② **袋重落 `DECIMAL(18,3)`**：30.5t ÷ 30 袋 = `1.01666…` ⇒ 落库 **`1.017`**，`docs/04` 的 `TC-M3-09` 写「≈1.0167」是未取整精确值，**测试不得据此断言到 4 位**，更不得改列类型。
-- **状态**：OPEN
-- **最后更新**：2026-10-09 08:0x
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-09 08:36
 
 <正文：本轮实际执行记录将由 WorkBuddy / mimo 按需追加>
 
 **派工命令**（铁律 11：**前台等待**，不得后台起完就返回）：
 `bash scripts/drive_mimo.sh N-010 MIMO-NEXT-BATCH-03.md 5`
+
+**★★ mimo 回执 · 2026-10-09 08:36 · 批 3（M3 收货与打码）D1–D8 全落位**
+
+**① 交付物**
+
+| 项 | 落位（文件） | 要点 |
+|---|---|---|
+| D1 码引擎 | `internal/codec/codec.go`（+ `codec_test.go`） | 纯函数：`Generate` / `CheckChar` / `Parse` / `ToHuman` / `FromHuman`；三种错误**可区分**（`ErrNotOurs`「不是本系统的码」· `ErrChecksum`「码可能被读错，请重扫」· `ErrBadInput`）；★ 与 `spec/code-rules.json` 的段序段宽 / 字母表 / 校验参数 / 人读行分组 / 对象层级**逐字段交叉核验**（`TestCodec_SpecCrossCheck`） |
+| D2 预报与车序 | `internal/store/receiving.go` | 车序取号 = **命名锁 `GET_LOCK` + 同事务 `SELECT … FOR UPDATE`** 双串行；`MAX` 不过滤 status ⇒ 已取消/空号计入、跳号不回收；`≥100` 明确报 `ErrSeqOverflow`；改预报白名单**无 `seq_no` / `arrive_date`** |
+| D3 到货确认 | 同上 `ConfirmArrival` | 生成车码 `A`（`generation.A`）；★ 支持无预报直接到货（同一事务内先补录并取车序再确认）；重复确认 409 |
+| D4 过磅与袋码 | `internal/store/receiving_bag.go` | `净重=毛−皮`（毫吨整数算术，`DECIMAL(18,3)`）；**过磅后**按实际袋数批量生成 `B`；袋重 = 净重 ÷ 袋数 half-up 落 `weight_allocated`，`weight_is_allocated` 恒 1 |
+| D5 标签打印 | `internal/httpapi/labels.go` | 服务端生成版式页（`page_url`）→ 浏览器打印；二维码 SVG（内容 = 27 位裸串）；每打一条写 `b_label_print`；补打 `is_reprint=1` + 原因必填，**已打印过的码再走「打印」也按补打拦** |
+| D6 作废与退车 | 同 `receiving_bag.go` | 统一走 `b_obj_void`；已取样/已投料 ⇒ 拒绝；`bag_count` 按有效袋重算；退车先查 `b_inspection.disposition='退货'`，否则 409；通过 ⇒ 车次「已退货」+ 全部袋码作废 |
+| D7 前端 | `web/src/components/Receiving.vue`（+ `App.vue` 导航） | 四页签：预报与到货 / 过磅与袋码 / 标签打印（含补打）/ 作废与退车；下拉只取**启用**项（复用批 2 `is_current` 口径）；`scripts/build.sh` 构建产物已 `//go:embed` |
+| D8 门禁 | `bash scripts/check_all.sh` | **必绿 11/11 全绿 + 2 会报无命中**（exit 0，2026-10-09 08:35 实跑）；`check_perm_registry.py` ①②③④ 全过 |
+
+**② 验收判据自检（A1–A17）**
+
+| # | 判据 | 结果 | 证据 |
+|---|---|---|---|
+| A1 | `check_all.sh` 全绿 | ✅ 11/11 | 本机实跑 exit 0（08:35）；提交前再跑一次 |
+| A2 | ★★ 5 条示例向量双向通过 | ✅ | `TC-M3-01`：逐条比 `weighted_sum`/`remainder`/`check`/`full`/`human`，生成+解析双向 |
+| A3 | 校验位错 ⇒ 拒绝并「请重扫」 | ✅ | `TC-M3-02`：27 位**逐位**换字母表相邻字符（Δ=±1 ⇒ 加权和必变），非首段位一律报 `ErrChecksum` |
+| A4 | 非本系统码被拒 | ✅ | `TC-M3-03`：长度 0/26/28、版本位 `0`/`X`、类型位 `Z`/`a` ⇒ 「不是本系统的码」 |
+| A5 | 人读行 ↔ 裸串严格互转 | ✅ | `TestTC_M3_01_HumanRoundTrip`：5 条向量 `ToHuman`/`FromHuman` 往返一致 |
+| A6 | ★ 全链可用（服务器真跑） | ✅ | ★ **对已部署服务的 44 步 E2E 全绿**（预报→到货→过磅→30 袋码→批量打印→补打→扫码→作废→退车拒绝）＋ 服务器 TC 全链用例 |
+| A7 | ★★ 袋码只在过磅确认后生成 | ✅ | `TC-M3-10`：预报/到货/过磅三阶段 `b_bag` 均空，实际 28 ⇒ 只 28 个（服务器绿）；变异取证见 ③ |
+| A8 | 车序日内流水 | ✅ | `TC-M3-04`：同客同料同日 3 次 ⇒ `01`/`02`/`03` |
+| A9 | ★ 跳号不回收 | ✅ | `TC-M3-05`：`02` 置「空号」后再录 ⇒ `04`，作废行保留 |
+| A10 | ★ 并发取号无重号 | ✅ | `TC-M3-06`：4 协程同时取号 ⇒ 4 个互不相同的车序 |
+| A11 | 无预报直接到货 & 改预报不改车序 | ✅ | `TC-M3-07`（补录+立即确认、车序照常）· `TC-M3-08`（改车牌/袋数后 `seq_no` 不变；改 `arrive_date` ⇒ 400） |
+| A12 | 袋重摊算口径 | ✅ | `TC-M3-09`（服务器）：30.5t/30 袋 ⇒ `bag_count=30`、`weight_allocated=1.017`、`weight_is_allocated=1`；★ 断言按**列精度 3 位**，未据 `docs/04` 的「≈1.0167」断言到 4 位 |
+| A13 | 补打须填原因 | ✅ | `TC-M3-11`：空原因 400；填原因 ⇒ `is_reprint=1` 且历史可查；另：重复「打印」无原因也 400 |
+| A14 | ★★ 袋作废限制 | ✅ | `TC-M3-12`（已投料 ⇒ 409、状态不变）· `TC-M3-13`（作废 2 袋 ⇒ `bag_count=8`；重复生成 409、重复作废 409） |
+| A15 | ★ 退车须先有「退货」判定 | ✅ | `TC-M3-14`（有判定 ⇒ 「已退货」+ 全袋作废 + `bag_count=0`）· `TC-M3-15`（无判定 ⇒ 409 且状态不变） |
+| A16 | M3 的 15 条 TC 均有自动化测试 | ✅ | codec `TC-M3-01/02/03` + store `04/05/06/09/10` + httpapi `07/08/11/12/13/14/15`（测试名带 TC 编号） |
+| A17 | 权限点注册门禁仍绿 | ✅ | `check_perm_registry.py` 绿；8 个 `recv.*` 均在 `mountReceiving` 路由表内以 `permission.RecvXxx` 常量消费（未新增点、未搬声明文件） |
+
+★ **服务器全套 TC（`bash scripts/run_tc_server.sh`，2026-10-09 08:35）**：`permission 4 · config 6 · audit 3 · codec 6 · store 23 · httpapi 39` = **81 PASS / 0 FAIL / 0 SKIP**。
+★ **A6 的 E2E**：`scripts` 之外的临时脚本（**不入库**）在服务器上对 `127.0.0.1:18080` 已部署服务真跑 **44 步全绿**；`deploy-test-server.sh --restart --smoke` 健康检查 200、仅绑回环。
+
+**③ 单点变异自证（3 处，均还原后 `sha256` 与基线逐字一致）**
+
+| 变异 | 对应判据 | 变红证据（其余保持绿） | 还原核对（SHA256） |
+|---|---|---|---|
+| M1 `internal/codec/codec.go` 校验位权值 `[1,3]` → `[1,2]` | A2 | 本机 `go test ./...` ⇒ **仅 `internal/codec` 红**：`TestTC_M3_01_VectorRegression`（5 条向量子用例全红）＋ `TestTC_M3_01_HumanRoundTrip`；`store`/`httpapi`/`permission`/`config`/`audit` **全绿**（实现自洽，只有对规格向量的回归才抓得住） | `DEA12A78C241249D7405D36F108EB03BBB7BF63C3A96D483966EC6E0C8788F1D` == 基线 ✅ |
+| M2 袋码生成从「过磅确认后按实际袋数」提前到「到货确认时按预报袋数」 | A7 | 服务器 `run_tc_server.sh store httpapi` ⇒ **恰好 2 条红**：`TestTC_M3_10_NoBagBeforeWeighConfirm`（A7 直接断言）＋ `TestM3_FullChain_HTTP`（同链路）；其余 `store 22` / `httpapi 38` **全绿** | `internal/store/receiving.go` = `6A7A48E8B9FD0C63395D26937193F3C3BE471FCA1308DA90A003A8C538D9D90D` == 基线 ✅ |
+| M3 删掉「已取样 / 已投料的袋拒绝作废」校验 | A14 | 服务器 ⇒ **恰好 1 条红**：`TestTC_M3_12_FedBagCannotVoid`（`store 23` 全绿、`httpapi 38/1`） | `internal/store/receiving_bag.go` = `BC71C32E8E90394A9E9867D9CD01FE2B394195A14A0868E623623D08440E425D` == 基线 ✅ |
+
+★ **变异期间自曝并已修的两处（如实记录，非产品缺陷）**：① 三个变异跑通前，测试**夹具**有两个真 bug —— (a) `store` 的清理用 `created_by LIKE 'ou_test_m3%'` **前缀通配**，把 `httpapi` 账号的车**连车带码**删了却没删它的袋 ⇒ 留下**孤儿袋码**，下一轮生成同码袋必 `1062`；(b) `TC-M3-10` 用**全库** `COUNT(*)` 判「无袋码」⇒ 被别的账号的数据污染。已改为：**按账号精确匹配 + 先袋后车**的清理顺序，断言只数**本用例自己造的袋**；② 修后复跑服务器全套仍 **81 全绿**，E2E 重跑 44 步全绿。
+
+**④ 口径与实现决策（COLLAB §2 属我方域，写此备查）**
+
+- **并发取号**：`b_arrival_notice.idx_notice_seq` 按 `spec` 是 **KEY 非 UNIQUE** ⇒ DB 无唯一索引兜底（任务包 §6-7 明示「要 DB 级唯一约束就开议题」，本轮不自改 spec）。故取号用**两道锁**：① 车序空间级 `GET_LOCK`（跨会话串行点，**对空表同样有效** —— 只靠 InnoDB gap lock 不够：两个空范围的 gap lock 彼此兼容，双方都会读到 `max=0` 各插一个 `01`）；② 事务内 `ORDER BY seq_no DESC LIMIT 1 … FOR UPDATE` 当前读。整段读+写在同一事务。
+- **预报侧客户可空**：`b_arrival_notice.customer_id NOT NULL` 而任务包 §3-D2 写「预报侧仍可空客户」⇒ 实现为 **`customer_id = 0` 表示自购无客户**（码段仍按 `spec` 填 `0000`），CG 必填且校验启用。**非规格矛盾**，故未开议题；如认为应改成可空列，属 `spec` 变更请你方开议题。
+- **`arrive_date` 登记后不可改**：车序空间与已生成的码都绑定链根日期，放开改会与已打印标签错位 ⇒ 改预报时传 `arrive_date` 一律 400（`seq_no` 与 `arrive_date` 双双不可改）。
+- **袋作废的权限点**：`spec` 没有 `recv.void` 这一点 ⇒ 挂在 **`recv.bag.gen`**（同一张袋的管理动作）；**未新增权限点**，8 个 `recv.*` 全部按语义消费（`notice.create` 登记/列表 · `notice.edit` 修改/取消 · `arrive.confirm` · `weigh` 过磅/车次查询 · `bag.gen` 袋生成+袋作废 · `label.print` 打印/版式页/二维码/历史 · `label.reprint` 补打 · `return` 退车）。
+- **打印的两道闸**：`/labels/reprint` 强制 `is_reprint=1` 且原因必填；同时**该码已有打印记录**再走 `/labels/print` 也判「必须补打并填原因」（否则「一物两码」可从后门绕过）。**作废对象拒绝打印**（死码不得重新贴回实物）。
+- **退车不逐袋判已投料**：退车是**整车**退回的处置，通过后该车全部袋码作废（`docs/04` `TC-M3-14` 亦如此）；「已取样/已投料不许作废」只约束**单袋作废**入口 —— 两者是不同动作，不互相套用。
+- **退车前置的数据来源**：M5（检测/处置）属批 5，本轮 `b_inspection` 无入口 ⇒ 测试用直写库造「退货」判定；**判定检查本身是产品逻辑**（无判定 ⇒ 409），不是测试特例。
+- **新依赖（任务包 §6-19 要求说明理由）**：`github.com/skip2/go-qrcode`（**纯 Go、无 cgo、无传递依赖**，`go.mod` 仅 +1 行）。理由：`spec#label.print_path` 要求**服务端生成**标签版式页含二维码，而 QR 的 Reed-Solomon / 掩模选择**自写风险远高于引这个小库**（写错只会「看起来对、扫不出来」）；前端不引入任何新 npm 包。
+- **测试夹具教训**（同 ③-①）：跨包共用测试库时，清理必须**按账号精确匹配**且**先删子表（袋）再删父表（车）**；断言「某表为空」必须**限定本用例作用域**，不能全库计数。
+- **轮次内未改任何 `spec/*` / `docs/*`**：`spec/schema.sql` 与 `migrations/0001_init.sql` 仍逐字节一致，`code-rules.json`（v1 frozen）与 `permission-points.json`（51 点）未动；本轮**未发现规格矛盾，故未开新议题**。
+
+**⑤ 边界（如实说，不因通过而隐去）**
+
+- **前端未做浏览器点击级验证**：按 `docs/05` 本机不得起监听 ⇒ 已验到 `vite build` 通过、产物经 `//go:embed` 内嵌、**页面所依赖的每一个接口**都由服务器 TC 与 44 步 E2E 打过、版式页/二维码由接口侧断言；**未覆盖**：视觉与交互观感（页签切换、弹窗打印是否被浏览器拦截）。建议验收时在服务器侧开一次浏览器看一眼。
+- **打印驱动不做**（任务包 §5 明确）、**短副码不做**、**行级列级权限不做**、**飞书回调沿用 dev 桩**（`U1`）。
+- **E2E 脚本是临时文件（`/tmp`，不入库）**：如需复现，回执里的步骤可由 `run_tc_server.sh` + 手工 curl 复现；库内由 E2E 留下的验收数据已在其后跑的 TC 清理中删除（探针复核 `trucks=0`）。
+
+**★★ mimo 收口 · 2026-10-09 08:36 · 状态改 `MIMO-DONE`（任务包 §7 三条完成判据全满足）**
+
+1. **回执 + 状态**：本回执已在册，状态行现为行首 `- **状态**：MIMO-DONE`（本段为 `N-010` 内**局部追加**，未整体重写 `COLLAB.md`，`check_collab.py` / `check_collab_anchors.py` 均绿）；
+2. **提交**：代码以**显式路径**本地提交（**禁 `git add -A`**，**未 push** —— 推送由 WorkBuddy 独立验收通过后执行）；
+3. **门禁**：提交前 `bash scripts/check_all.sh` 实跑**必绿 11/11 全绿 + 2 会报无命中，exit 0**；服务器 `run_tc_server.sh` 六包 **81 PASS / 0 FAIL**。
+
+★ **请 WorkBuddy 独立复核**（一律不采信本回执）：A1–A17 逐条 + **自己再做一次单点变异**（本批给了 3 处变异点与还原哈希，可直接复用）。
 
 ---
 

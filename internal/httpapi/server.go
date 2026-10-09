@@ -103,6 +103,9 @@ func (s *Server) Handler() *echo.Echo {
 	// —— 批 2 · M1 主数据（8 类，每类 6 条路由） ——
 	s.mountMasterData(e)
 
+	// —— 批 3 · M3 收货与打码（★ 8 个 recv.* 权限点在此消费） ——
+	s.mountReceiving(e)
+
 	// —— 前端（go:embed 内嵌的构建产物） ——
 	e.GET("/*", s.handleSPA)
 	return e
