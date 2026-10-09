@@ -1074,7 +1074,7 @@
 - **交付提交（3 次分阶段、显式路径、未 push）**：`cb7ac10` D1–D6 后端 + store/httpapi **双层测试**（+3771 行：`internal/store/production.go` 新建 · `receiving_bag.go` 联动修正 · `internal/httpapi/prod.go` 新建 · `server.go` 挂 `mountProd` · `recv.go` 接 `ErrTruckFed`→409 · 两个 `m6_test.go`）→ `818c3ca` 服务器 TC 全绿修复（human 改由 `codec.ToHuman` 派生 · `fed_at` NOT NULL 时省列走库默认 · perm-summary 断言按多角色并集含 `INIT`）→ `e3e9d54` **D7 前端**「生产」页 + `build.sh` 重嵌 `internal/webui/dist`（`index-C7Ln-uB2.js`）。
 - **A1 门禁**：`bash scripts/check_all.sh` ⇒ **必绿 11/11 全绿**（另 2 会报项无命中）；提交前均复跑。
 - **A17 服务器全套 TC**（`bash scripts/run_tc_server.sh`，★ 包集**自动发现 6 个**：`audit codec config httpapi permission store`）⇒ **全绿**：audit **PASS=3** · codec **6** · config **8** · httpapi **68** · permission **4** · store **52** —— 全部 **FAIL=0 SKIP=0**，**合计 141 PASS / 0 FAIL / 0 SKIP**（★ 四处变异逐一还原后复跑仍为此数）。
-- **A18 服务真起**：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ `/healthz` **200** 且 `version == e3e9d54 == HEAD`；监听 **127.0.0.1:18080**（只绑回环）。
+- **A18 服务真起**：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ `/healthz` **200** 且 `version == HEAD`（回执提交前实测 `version=e3e9d54`；**回执提交后已按最终 HEAD 再复部署一次**，故验收时 `version` 与彼时 `HEAD` 逐字一致）；监听 **127.0.0.1:18080**（只绑回环）。
 - **★★ 单点变异自证（4 处；每处改完跑 6 包全量，除下表所列外全部保持绿；逐处还原后 sha256 与基线逐字一致）**：
 
   | # | 变异点 | 变红的用例（仅此） | 对应判据 | 还原后 sha256 |
