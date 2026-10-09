@@ -217,14 +217,17 @@ func (s *Server) handleReportPermSummary(c echo.Context) error {
 //	404：报告不存在；409：状态冲突 / 取号超限；400：输入与禁用词；其余 ⇒ 500。
 func reportErr(err error) error {
 	switch {
-	case errors.Is(err, store.ErrReportNotFound):
+	case errors.Is(err, store.ErrReportNotFound),
+		errors.Is(err, store.ErrProdNotFound),
+		errors.Is(err, store.ErrCodeUnknown):
 		return echo.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, store.ErrReportState),
 		errors.Is(err, store.ErrReportSeqBusy),
 		errors.Is(err, store.ErrReportSeqOverflow):
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrReportBadInput),
-		errors.Is(err, store.ErrReportForbidden):
+		errors.Is(err, store.ErrReportForbidden),
+		errors.Is(err, store.ErrProdBadInput):
 		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
 	default:
 		return err
