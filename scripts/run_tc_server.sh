@@ -7,10 +7,21 @@
 # ★ 本机只做两件事：交叉编译（GOOS=linux）与 scp 上传；**不 listen、不连库跑测试**。
 #
 # 用法：
-#   bash scripts/run_tc_server.sh                 # 全套
+#   bash scripts/run_tc_server.sh                 # 全套（★ 包集自动发现，见下）
 #   bash scripts/run_tc_server.sh store httpapi   # 只跑指定包（名字取自 ./internal/<名>）
-# 退出码：0 = 全绿；非 0 = 至少一个包失败。
+#   bash scripts/run_tc_server.sh --list-pkgs     # 只打印解析出的包集并退出（供探针自证）
+# 退出码：0 = 全绿；非 0 = 至少一个包失败；2 = 前置/编译失败或包集为空。
 # ★ 注意：本脚本会把仓库内的 .env 一并同步到服务器的测试树（DSN 只在服务器侧使用）。
+#
+# ★★ 包集自动发现（2026-10-09 修 —— 原为硬编码 `(permission config audit store httpapi)`）：
+#     硬编码列表在**新增测试包**时会**静默漏跑**，而末尾仍打印「总判定：全绿」——
+#     即「**部分覆盖**冒充**全部覆盖**」（同族缺陷：check_md_tables.py 文件头已记）。
+#     实测事故：批 3 新增 `internal/codec`（6 条 TC）后，跑「全套」只覆盖 5/6 个包。
+#     现改为扫描 `internal/*/` 下**含 `*_test.go`** 的目录：
+#       · `_` 前缀目录跳过（与 gofmt / go build 的排除口径一致）；
+#       · **不含测试文件的目录不得入选** —— 否则 `go test -c` 产不出二进制，
+#         后续 scp / 执行必失败（把「不适用」误当「失败」）；
+#       · **空包集一律拒绝执行（exit 2）** —— 防「零覆盖」冒充「全绿」。
 
 set -uo pipefail
 
@@ -21,15 +32,45 @@ HOST="${JX_DEPLOY_HOST:-chadhao@192.168.10.50}"
 REMOTE_DIR="${JX_TC_REMOTE:-jx-lab-trace-tc}"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15)
 
-ALL_PKGS=(permission config audit store httpapi)
-if [ "$#" -gt 0 ]; then
-  ALL_PKGS=("$@")
+# ---- 包集解析：显式参数优先；无参数 ⇒ 自动发现 ----
+resolve_pkgs() {
+  if [ "$#" -gt 0 ]; then
+    printf '%s\n' "$@"
+    return 0
+  fi
+  local d base tg
+  for d in internal/*/; do
+    [ -d "$d" ] || continue
+    base="${d#internal/}"; base="${base%/}"
+    case "$base" in _*) continue ;; esac
+    tg=("$d"*_test.go)
+    [ -e "${tg[0]}" ] || continue
+    printf '%s\n' "$base"
+  done
+}
+
+if [ "${1:-}" = "--list-pkgs" ]; then
+  shift
+  resolve_pkgs "$@"
+  exit 0
+fi
+
+ALL_PKGS=()
+while IFS= read -r _pkg; do
+  [ -n "$_pkg" ] || continue
+  ALL_PKGS+=("$_pkg")
+done < <(resolve_pkgs "$@")
+
+if [ "${#ALL_PKGS[@]}" -eq 0 ]; then
+  echo "★★ 包集为空 —— 拒绝执行（防「零覆盖」冒充「全绿」）：internal/ 下没有含 *_test.go 的包"
+  exit 2
 fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "===== [1/3] 交叉编译测试二进制（GOOS=linux）====="
+echo "  ★ 包集（${#ALL_PKGS[@]} 个）：${ALL_PKGS[*]}"
 for p in "${ALL_PKGS[@]}"; do
   out="$WORK/${p}.test"
   if ! GOOS=linux GOARCH=amd64 go test -c -o "$out" "./internal/$p"; then
