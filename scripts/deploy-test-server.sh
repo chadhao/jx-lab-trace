@@ -22,9 +22,12 @@ cd "$ROOT"
 HOST="${JX_DEPLOY_HOST:-chadhao@192.168.10.50}"
 REMOTE_DIR="${JX_DEPLOY_DIR:-jx-lab-trace}"          # 相对家目录，免 sudo
 BIN_NAME="jxlabtrace"
+REPORTD_NAME="reportd"                                # 批 8 · M9 公网侧静态服务（零 DB）
 LOCAL_BIN="bin/${BIN_NAME}-linux-amd64"
+LOCAL_REPORTD="bin/${REPORTD_NAME}-linux-amd64"
 ENV_FILE=".env.deploy"
 PORT="${JX_DEPLOY_PORT:-18080}"
+REPORTD_PORT="${JX_REPORTD_PORT:-18090}"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15)
 
 DO_RESTART=0; DO_SMOKE=0
@@ -47,9 +50,14 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "$GO" build -trimpath \
   -ldflags "-s -w -X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" \
   -o "$LOCAL_BIN" ./cmd/jxlabtrace
 ls -l "$LOCAL_BIN" | awk '{print "      "$5" bytes  "$9}'
+# 批 8 · reportd（公网侧静态服务，零 DB 依赖，只服务 served/）
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "$GO" build -trimpath \
+  -ldflags "-s -w" \
+  -o "$LOCAL_REPORTD" ./cmd/reportd
+ls -l "$LOCAL_REPORTD" | awk '{print "      "$5" bytes  "$9}'
 
 echo "[2/4] 确保服务器目录存在（家目录下，免 sudo）"
-ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p ~/$REMOTE_DIR/{bin,logs,attachments} && echo ok"
+ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p ~/$REMOTE_DIR/{bin,logs,attachments,reports/served,reports/_inactive} && echo ok"
 
 # ★ [2.5/4]（mimo 批 1 修，见 COLLAB N-003）：要重启就必须**先停旧进程再上传** ——
 #   旧进程正在执行 bin/jxlabtrace 时，scp 对该文件 O_TRUNC ⇒ Linux 返回
@@ -94,12 +102,43 @@ else
   fi
 fi
 REMOTE
+
+# 批 8：reportd 同样要停（独立 reportd.pid；★ 兜底扫描按 /proc/<pid>/exe 精确匹配
+#   本目录 bin/reportd，只停自己的进程）
+ssh "${SSH_OPTS[@]}" "$HOST" "bash -s" <<REMOTE_REPORTD
+set -u
+cd ~/$REMOTE_DIR
+SELF_REPORTD="\$HOME/$REMOTE_DIR/bin/$REPORTD_NAME"
+pid="\$(cat reportd.pid 2>/dev/null || true)"
+if [ -n "\$pid" ] && kill -0 "\$pid" 2>/dev/null; then
+  kill "\$pid"; sleep 1
+  kill -0 "\$pid" 2>/dev/null && kill -9 "\$pid" 2>/dev/null || true
+  echo "旧 reportd 已停止（PID \$pid）"
+else
+  stopped=""
+  for p in /proc/[0-9]*; do
+    kp="\${p#/proc/}"
+    [ "\$kp" = "\$\$" ] && continue
+    exe="\$(readlink "\$p/exe" 2>/dev/null || true)"
+    [ "\$exe" = "\$SELF_REPORTD" ] || continue
+    kill "\$kp" 2>/dev/null; sleep 1
+    kill -0 "\$kp" 2>/dev/null && kill -9 "\$kp" 2>/dev/null || true
+    stopped="\$stopped \$kp"
+  done
+  if [ -n "\$stopped" ]; then
+    echo "已兜底停止 reportd 进程：\$stopped"
+  else
+    echo "确认无旧 reportd"
+  fi
+fi
+REMOTE_REPORTD
 fi
 
 echo "[3/4] 上传二进制与运行配置"
 scp "${SSH_OPTS[@]}" "$LOCAL_BIN" "$HOST:~/$REMOTE_DIR/bin/$BIN_NAME" >/dev/null
+scp "${SSH_OPTS[@]}" "$LOCAL_REPORTD" "$HOST:~/$REMOTE_DIR/bin/$REPORTD_NAME" >/dev/null
 scp "${SSH_OPTS[@]}" "$ENV_FILE"  "$HOST:~/$REMOTE_DIR/.env" >/dev/null
-ssh "${SSH_OPTS[@]}" "$HOST" "chmod 700 ~/$REMOTE_DIR/bin/$BIN_NAME && chmod 600 ~/$REMOTE_DIR/.env && echo '权限已收紧（二进制 700 / 配置 600）'"
+ssh "${SSH_OPTS[@]}" "$HOST" "chmod 700 ~/$REMOTE_DIR/bin/$BIN_NAME ~/$REMOTE_DIR/bin/$REPORTD_NAME && chmod 600 ~/$REMOTE_DIR/.env && echo '权限已收紧（二进制 700 / 配置 600）'"
 
 if [ "$DO_RESTART" = 1 ]; then
   echo "[4/4] 重启服务（在服务器上）"
@@ -132,6 +171,10 @@ fi
 set -a; . ./.env; set +a
 export JX_HTTP_ADDR="\${JX_HTTP_ADDR:-127.0.0.1:$PORT}"
 export JX_ATTACH_DIR="\${JX_ATTACH_DIR:-$PWD/attachments}"
+# 批 8 · reportd 运行参数（取值一律加双引号，N-004 判例）
+export JX_REPORT_DIR="\${JX_REPORT_DIR:-$PWD/reports}"
+export JX_REPORTD_ADDR="\${JX_REPORTD_ADDR:-127.0.0.1:$REPORTD_PORT}"
+export JX_REPORT_PUBLIC_BASE="\${JX_REPORT_PUBLIC_BASE:-http://127.0.0.1:$REPORTD_PORT/r}"
 nohup ./bin/$BIN_NAME >> logs/app.log 2>&1 &
 echo \$! > run.pid
 sleep 2
@@ -140,19 +183,29 @@ if kill -0 "\$(cat run.pid)" 2>/dev/null; then
 else
   echo "!!! 启动失败，日志尾部：" >&2; tail -20 logs/app.log >&2; exit 1
 fi
+# —— reportd：公网侧静态服务（零 DB；只服务 \$JX_REPORT_DIR/served/）——
+nohup ./bin/$REPORTD_NAME >> logs/reportd.log 2>&1 &
+echo \$! > reportd.pid
+sleep 1
+if kill -0 "\$(cat reportd.pid)" 2>/dev/null; then
+  echo "reportd 已启动（PID \$(cat reportd.pid)，监听 \${JX_REPORTD_ADDR}，目录 \${JX_REPORT_DIR}）"
+else
+  echo "!!! reportd 启动失败，日志尾部：" >&2; tail -20 logs/reportd.log >&2; exit 1
+fi
 REMOTE
 fi
 
 if [ "$DO_SMOKE" = 1 ]; then
-  echo "[smoke] 健康检查（在服务器上）"
+  echo "[smoke] 健康检查（在服务器上，★ 两个进程分列断言）"
   ssh "${SSH_OPTS[@]}" "$HOST" "bash -s" <<REMOTE
 set -u
 cd ~/$REMOTE_DIR
 # ★ N-004 联动（WorkBuddy，2026-10-09）：模板现已要求取值一律加双引号 ⇒ 这里**必须先剥引号**，
-#   否则 \`cut -d= -f2-\` 会带上字面引号，拼出 \`http://"127.0.0.1:18080"/healthz\` 而 curl 解析失败。
+#   否则 cut -d= -f2- 会带上字面引号，拼出 http://"127.0.0.1:18080"/healthz 而 curl 解析失败。
 #   tr 用八进制转义（\042=" / \047='）书写，避免在 heredoc 里出现字面引号。
 ADDR="\$(grep -E '^[[:space:]]*JX_HTTP_ADDR[[:space:]]*=' .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\\042\\047' | tr -d '[:space:]')"
 ADDR="\${ADDR:-127.0.0.1:$PORT}"
+echo "=== 主服务（$BIN_NAME） ==="
 echo "--- /healthz ---"
 curl -s -m 5 -o /dev/null -w 'http=%{http_code}\n' "http://\$ADDR/healthz" || echo "curl 失败"
 curl -s -m 5 "http://\$ADDR/healthz" | head -c 400; echo
@@ -160,6 +213,17 @@ echo "--- /api/me（dev 模式应返回身份） ---"
 curl -s -m 5 "http://\$ADDR/api/me" | head -c 400; echo
 echo "--- 端口归属（确认只绑回环） ---"
 ss -lntp 2>/dev/null | grep "\$ADDR" || echo "(未检出监听)"
+
+echo "=== reportd（$REPORTD_NAME，零 DB 的公网侧静态服务） ==="
+RADDR="\$(grep -E '^[[:space:]]*JX_REPORTD_ADDR[[:space:]]*=' .env 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\\042\\047' | tr -d '[:space:]')"
+RADDR="\${RADDR:-127.0.0.1:$REPORTD_PORT}"
+echo "--- reportd /healthz（应 200 且 body=ok） ---"
+curl -s -m 5 -o /dev/null -w 'http=%{http_code}\n' "http://\$RADDR/healthz" || echo "curl 失败"
+curl -s -m 5 "http://\$RADDR/healthz" | head -c 100; echo
+echo "--- reportd 未命中的链接应 404（不查库、纯静态） ---"
+curl -s -m 5 -o /dev/null -w 'http=%{http_code}\n' "http://\$RADDR/r/nonexistent0000000000000000000000000.html"
+echo "--- reportd 端口归属（确认只绑回环） ---"
+ss -lntp 2>/dev/null | grep "\$RADDR" || echo "(未检出监听)"
 REMOTE
 fi
 
