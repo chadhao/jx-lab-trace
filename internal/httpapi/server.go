@@ -121,6 +121,12 @@ func (s *Server) Handler() *echo.Echo {
 	// —— 批 7 · M8 追溯（★ 3 个 trace.* 权限点在此消费） ——
 	s.mountTrace(e)
 
+	// —— 批 8 · M9 报告分享（★ 2 个 report.* 权限点 + rpt.view 读入口在此消费） ——
+	s.mountReport(e)
+
+	// —— 批 8 · M10 报表（★ rpt.view / rpt.export 在此消费） ——
+	s.mountRpt(e)
+
 	// —— 前端（go:embed 内嵌的构建产物） ——
 	e.GET("/*", s.handleSPA)
 	return e
