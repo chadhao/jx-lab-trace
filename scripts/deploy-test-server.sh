@@ -186,7 +186,9 @@ else
   echo "!!! 启动失败，日志尾部：" >&2; tail -20 logs/app.log >&2; exit 1
 fi
 # —— reportd：公网侧静态服务（零 DB；只服务 \$JX_REPORT_DIR/served/）——
-nohup ./bin/$REPORTD_NAME >> logs/reportd.log 2>&1 &
+# ★ env -u JX_DB_DSN：启动前**显式剔除 DSN** —— 进程环境里连 DSN 都不带，
+#   把「公网侧不连内网库」从「代码不读」加强到「环境也没有」（A10 反证）。
+env -u JX_DB_DSN nohup ./bin/$REPORTD_NAME >> logs/reportd.log 2>&1 &
 echo \$! > reportd.pid
 sleep 1
 if kill -0 "\$(cat reportd.pid)" 2>/dev/null; then
