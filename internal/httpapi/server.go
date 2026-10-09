@@ -115,6 +115,12 @@ func (s *Server) Handler() *echo.Echo {
 	// —— 批 6 · M6 生产与谱系（★ 6 个 prod.* 权限点在此消费） ——
 	s.mountProd(e)
 
+	// —— 批 7 · M7 出货（★ 4 个 ship.* 权限点在此消费） ——
+	s.mountShip(e)
+
+	// —— 批 7 · M8 追溯（★ 3 个 trace.* 权限点在此消费） ——
+	s.mountTrace(e)
+
 	// —— 前端（go:embed 内嵌的构建产物） ——
 	e.GET("/*", s.handleSPA)
 	return e
