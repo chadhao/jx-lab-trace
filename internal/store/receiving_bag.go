@@ -531,8 +531,13 @@ WHERE id = ?`, truckLotID, truckLotID)
 
 // ReturnTruck 退车登记：★ 必须先有质检「退货」处置判定，否则拒绝。
 //
-// 通过后车次转「已退货」，且该车**全部**袋码作废（整批一并处理，不再逐袋判断
-// 已取样/已投料 —— 退车意味着整车退回，取样/投料的前置本身已不成立）。
+// 通过后车次转「已退货」，且该车**全部**袋码作废（整批一并处理）。
+//
+// ★★ 批 6 联动修正（任务包 §6-24 / A15）：M6 之前「退车 ⇒ 整车退回，取样/投料的
+//
+//	前置不成立」；★ 引入投料后该假设不再成立 —— 料已进生产批，物理上不可能退回，
+//	且 VoidBag 的「已投料 ⇒ 拒绝作废」守卫**被整批 UPDATE 绕过** ⇒ 必须补前置：
+//	该车次下存在已投料袋 ⇒ 拒绝（报错写明袋数）。
 func (s *Store) ReturnTruck(ctx context.Context, truckLotID int64, reason string, actor MDActor) (TruckLot, error) {
 	reason = strings.TrimSpace(reason)
 
@@ -554,6 +559,19 @@ func (s *Store) ReturnTruck(ctx context.Context, truckLotID int64, reason string
 	//	时判重复退车；仅状态翻转不拦（否则 API 链路下退车登记永远走不到）。
 	if t.Status == TruckStatusReturned && t.BagCount == 0 {
 		return TruckLot{}, fmt.Errorf("%w：车次 #%d 已退货", ErrAlreadyVoid, truckLotID)
+	}
+
+	// ★★ 批 6 联动修正（§6-24 / A15）：已有袋投料 ⇒ 拒绝退车。
+	var fedBags int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(DISTINCT f.bag_id)
+  FROM b_feed_record f
+  JOIN b_bag b ON b.id = f.bag_id
+ WHERE b.truck_lot_id = ?`, truckLotID).Scan(&fedBags); err != nil {
+		return TruckLot{}, fmt.Errorf("检查投料记录失败: %w", err)
+	}
+	if fedBags > 0 {
+		return TruckLot{}, fmt.Errorf("%w：该车已有 %d 袋投料，不能退车", ErrTruckFed, fedBags)
 	}
 
 	// ★ 前置：质检处置 = 退货（M5 的判定在 b_inspection.disposition）

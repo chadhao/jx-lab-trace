@@ -380,7 +380,8 @@ func recvErr(err error) error {
 		errors.Is(err, store.ErrWeighAfterBags),
 		errors.Is(err, store.ErrBagInUse),
 		errors.Is(err, store.ErrAlreadyVoid),
-		errors.Is(err, store.ErrNoReturnDecision):
+		errors.Is(err, store.ErrNoReturnDecision),
+		errors.Is(err, store.ErrTruckFed): // ★ 批 6 联动：已有投料袋不得退车（§6-24）
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrRecvBadInput),
 		errors.Is(err, store.ErrVoidReason),

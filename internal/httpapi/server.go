@@ -112,6 +112,9 @@ func (s *Server) Handler() *echo.Echo {
 	// —— 批 5 · M5 检测（★ 11 个 insp.* 权限点在此消费） ——
 	s.mountInsp(e)
 
+	// —— 批 6 · M6 生产与谱系（★ 6 个 prod.* 权限点在此消费） ——
+	s.mountProd(e)
+
 	// —— 前端（go:embed 内嵌的构建产物） ——
 	e.GET("/*", s.handleSPA)
 	return e
