@@ -172,7 +172,9 @@ set -a; . ./.env; set +a
 export JX_HTTP_ADDR="\${JX_HTTP_ADDR:-127.0.0.1:$PORT}"
 export JX_ATTACH_DIR="\${JX_ATTACH_DIR:-$PWD/attachments}"
 # 批 8 · reportd 运行参数（取值一律加双引号，N-004 判例）
-export JX_REPORT_DIR="\${JX_REPORT_DIR:-$PWD/reports}"
+# ★ \$PWD 必须转义 ⇒ 在【远端】展开；不转义会被本机 Git-BASH 展开成 /c/... 而落到无权限路径
+#   （2026-10-09 实测：JX_REPORT_DIR 缺省时 mkdir /c: permission denied ⇒ reportd 起不来）。
+export JX_REPORT_DIR="\${JX_REPORT_DIR:-\$PWD/reports}"
 export JX_REPORTD_ADDR="\${JX_REPORTD_ADDR:-127.0.0.1:$REPORTD_PORT}"
 export JX_REPORT_PUBLIC_BASE="\${JX_REPORT_PUBLIC_BASE:-http://127.0.0.1:$REPORTD_PORT/r}"
 nohup ./bin/$BIN_NAME >> logs/app.log 2>&1 &
