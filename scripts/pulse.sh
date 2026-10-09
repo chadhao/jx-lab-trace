@@ -20,6 +20,7 @@
 #   10 = RUNNING_HEALTHY 有轮次在跑且活跃 ⇒ **Agent 应结束本轮**
 #   20 = STALLED_KILLED  有轮次但空转，**已杀进程并盘点中间产物** ⇒ Agent 决定续派/归档
 #   30 = NO_REPO/异常
+#   40 = ★ BUSY_WRITER   无 mimo，但**写者锁活跃**（另一个写者在写）⇒ Agent 结束本轮、只读
 #
 # ★★ 关于频率（2026-10-09 结论，**已定案**）：
 #   ① 平台自动化的**最小调度粒度是 HOURLY** —— 试过 `FREQ=HOURLY;INTERVAL=1;BYMINUTE=0,15,30,45`，
@@ -51,6 +52,8 @@ say "[锁] $LOCK_OUT"
 
 LOCK_MIMO="$(sed -n 's/^mimo_pid=//p' .run/mimo.lock/meta 2>/dev/null | head -1)"
 LOCK_DRIVER="$(sed -n 's/^driver_pid=//p' .run/mimo.lock/meta 2>/dev/null | head -1)"
+# ★ 锁的种类（COLLAB `N-008`）：driver=驱动轮次；writer=心跳/主会话的写者锁（TTL 型）
+LOCK_KIND="$(sed -n 's/^owner_kind=//p' .run/mimo.lock/meta 2>/dev/null | head -1)"
 
 # 进程探活：**不依赖锁**（在跑的可能是没加锁的旧驱动）
 MIMO_PIDS="$(tasklist 2>/dev/null | grep -i '^mimo\.exe' | awk '{print $2}' | tr '\n' ' ')"
@@ -65,6 +68,14 @@ say "[进程] mimo.exe=[${MIMO_PIDS:-无}]  drive_mimo=[${DRIVE_PIDS:-无}]"
 
 # ── ② 分类与处置 ────────────────────────────────────────────────
 if [ -z "$MIMO_PIDS" ]; then
+  # ★★ 先判「是否已有**活跃写者**」（COLLAB `N-008`）：写者锁活跃 ⇒ **本轮不写**，
+  #    否则「心跳轮次」与「主会话 / 另一个心跳」会并发写同一工作区（已两次实测）。
+  if [ "$LOCK_RC" = 0 ] && [ "$LOCK_KIND" = "writer" ]; then
+    say "[判定] **D · 无 mimo，但写者锁活跃**（$LOCK_OUT）"
+    rule
+    say "STATE=BUSY_WRITER —— **Agent 应结束本轮**：另一个写者正在写工作区，本轮只读不写"
+    exit 40
+  fi
   # ── A. 没在跑 ──
   say "[判定] **A · 无轮次在跑**"
   if [ -d .run/mimo.lock ]; then
@@ -78,7 +89,11 @@ if [ -z "$MIMO_PIDS" ]; then
   say "    最近 3 次提交:"
   git log --oneline -3 2>/dev/null | sed 's/^/        /'
   rule
-  say "STATE=IDLE —— 交给 Agent：① 复跑门禁 ② 读实现验收 ③ 通过则提交并推送 ④ 派下一批"
+  # ★★ 注意：本行**不得使用反引号**包命令 —— bash 会把它当**命令替换**真的执行
+  #   （实测踩过：写示例命令时用了反引号 ⇒ `pulse.sh` 在报 IDLE 的同时**自己抢了一把写者锁**
+  #    ⇒ 下一次跑判成 BUSY_WRITER ⇒ **自我锁死**。这正是 COLLAB N-008 预警的形态之一。）
+  #   同族第三次 ⇒ 见「附加铁律 13（引号纪律）」。用单引号或「」写字面文本。
+  say 'STATE=IDLE —— 交给 Agent：① 先取写锁（bash scripts/mimo_run_lock.sh acquire-writer heartbeat 1800；★ 取不到即说明有别的写者，本轮改只读）② 复跑门禁 ③ 读实现验收 ④ 通过则提交并推送 ⑤ 派下一批；⑥ 收尾释放写锁（release heartbeat）'
   exit 0
 fi
 
@@ -115,8 +130,11 @@ if [ "$STALL_RC" -ne 0 ]; then
     say "    变更清单（前 20）："
     git status --porcelain 2>/dev/null | head -20 | sed 's/^/        /'
     say "    规模：$(git diff --shortstat 2>/dev/null)"
-    say "    ★ 处置建议：**先归档再续派** —— 用 `git stash push -u -m wip-<时间>` 或打一个 wip 分支，"
-    say "      **不要直接丢弃**（半成品里可能已有真东西），**也不要直接留着**（会污染下一轮）。"
+    # ★★ 同样禁止反引号（见上）：这行若用反引号包 `git stash push ...`，走进 STALLED 分支时
+    #   脚本会**真的执行 stash**、未经确认地动工作区。用单引号写字面文本。
+    say '    ★ 处置建议：**先归档再续派** —— 用 git stash push -u -m wip-<时间>，或打一个 wip 分支；'
+    say '      **不要直接丢弃**（半成品里可能已有真东西），**也不要直接留着**（会污染下一轮）。'
+    say '      ★ 注意：本仓库 core.autocrlf=true，**禁用 git stash 归档 .go 文件**（会落成 CRLF 致 gofmt 判红）——用「复制归档 + 移除」替代（见附加铁律 12）。'
   else
     say "    ★ 工作区干净 ⇒ 无中间产物需归档。"
   fi
