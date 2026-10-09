@@ -8,7 +8,12 @@
 
 ## 0. 本轮说明（先读这段再读 §1）
 
-> **本轮是「从零开工」，不是续派。** 工作区干净、`HEAD == origin/main == a0b2d53`、门禁 **11/11** 全绿（WorkBuddy 于 2026-10-09 14:1x 实测）。
+> ★★ **2026-10-09 16:5x 更正：本轮是「续派」，不是从零开工。**
+> 上一轮（14:20–15:43）**中途被回收**（驱动被整树终止，陈锁未释放）。**已完成并本地提交**：**D1–D6 后端 = `19b0f91`**（`internal/httpapi/server.go` · `internal/httpapi/ship.go` · `internal/httpapi/trace.go` · `internal/store/shipment.go` · `internal/store/trace.go`，5 文件 / **+1936 行**）—— ★ **仅本地、未 push**（`origin/main` 仍为 `a0b2d53`）。
+> **未完成**：**D7（Vue3 前端）** 与 **D8（回执 ＋ 门禁保持）**；以及 D1–D6 的 **`internal/store` 层配套测试**（当时留下 `m7_test.go` / `m8_test.go` 两个**未写完且编译不过**的文件）。
+> ★ 该两份 WIP 已由 WorkBuddy **归档**到 `.workbuddy/wip-archive/2026-10-09-1645-N-014/`（`m7_test.go.wip` · `m8_test.go.wip` ＋ `README.md`，**内含当时的完整编译错误清单**）—— **可参考其用例意图**，但**不必迁就**其写法（它编译不过）。
+> **本轮基线**：`HEAD = 19b0f91`（本地）· 工作区**干净** · 门禁 **11/11 全绿**（WorkBuddy 于 2026-10-09 16:5x 实测）。
+> ★★ **D1–D6 已完成、不要重做**；直接从 **D7** 起，并**补齐 M7 / M8 的 store 层与 httpapi 层测试**（D2 / D4 / D5 / D6 各条均要求双层覆盖）。★ 铁律 12（**不要用 `git stash` / `git checkout` 处理未提交的 WIP**）**继续有效**。
 
 ★ **请务必带上批 5 / 批 6 换来的两条纪律**（见 `COLLAB.md §0` 附加铁律 11 / 12）：
 
