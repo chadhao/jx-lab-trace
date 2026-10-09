@@ -245,13 +245,13 @@ type ReworkInput struct {
 func scanBatch(sc interface{ Scan(...interface{}) error }) (ProductionBatch, error) {
 	var b ProductionBatch
 	var created sql.NullTime
-	var remark, human string
-	err := sc.Scan(&b.ID, &b.Code, &human, &b.CustomerID, &b.InputMaterialID,
+	var remark string
+	err := sc.Scan(&b.ID, &b.Code, &b.CustomerID, &b.InputMaterialID,
 		&b.PlannedOutputMaterialID, &b.BatchDate, &b.Status, &remark, &created, &b.CreatedBy)
 	if err != nil {
 		return ProductionBatch{}, err
 	}
-	b.Human = human
+	b.Human, _ = codec.ToHuman(b.Code)
 	b.Remark = remark
 	if created.Valid {
 		t := created.Time
@@ -261,22 +261,23 @@ func scanBatch(sc interface{ Scan(...interface{}) error }) (ProductionBatch, err
 }
 
 const batchSelect = `
-SELECT id, code, code, customer_id, input_material_id, planned_output_material_id,
+SELECT id, code, customer_id, input_material_id, planned_output_material_id,
        DATE_FORMAT(batch_date, '%Y-%m-%d'), status, COALESCE(remark, ''), created_at, created_by
   FROM b_production_batch`
 
 func scanFeed(sc interface{ Scan(...interface{}) error }) (FeedRecord, error) {
 	var f FeedRecord
-	var bagHuman, truckCode, remark string
+	var truckCode, remark string
 	var fedAt, created sql.NullTime
 	var weight sql.NullFloat64
-	err := sc.Scan(&f.ID, &f.BatchID, &f.BatchCode, &f.BagID, &f.BagCode, &bagHuman,
+	err := sc.Scan(&f.ID, &f.BatchID, &f.BatchCode, &f.BagID, &f.BagCode,
 		&f.TruckID, &truckCode, &f.CustomerID, &f.MaterialID,
 		&weight, &fedAt, &f.Operator, &remark, &created, &f.CreatedBy)
 	if err != nil {
 		return FeedRecord{}, err
 	}
-	f.BagHuman, f.TruckCode, f.Remark = bagHuman, truckCode, remark
+	f.BagHuman, _ = codec.ToHuman(f.BagCode)
+	f.TruckCode, f.Remark = truckCode, remark
 	if weight.Valid {
 		w := weight.Float64
 		f.FeedWeight = &w
@@ -294,7 +295,7 @@ func scanFeed(sc interface{ Scan(...interface{}) error }) (FeedRecord, error) {
 
 // feedSelect 投料行的统一查询（带袋 / 车次 / 客户 / 物料的关联展示字段）。
 const feedSelect = `
-SELECT f.id, f.batch_id, COALESCE(pb.code, ''), f.bag_id, b.code, COALESCE(b.code, ''),
+SELECT f.id, f.batch_id, COALESCE(pb.code, ''), f.bag_id, b.code,
        b.truck_lot_id, COALESCE(t.code, ''), COALESCE(t.customer_id, 0), COALESCE(t.material_id, 0),
        f.feed_weight, f.fed_at, f.operator, COALESCE(f.remark, ''), f.created_at, f.created_by
   FROM b_feed_record f
@@ -339,15 +340,16 @@ func scanOp(sc interface{ Scan(...interface{}) error }) (BatchOperation, error) 
 
 func scanFgLot(sc interface{ Scan(...interface{}) error }) (FgLot, error) {
 	var l FgLot
-	var human, packSpec, remark string
+	var packSpec, remark string
 	var netWeight sql.NullFloat64
 	var producedAt, created sql.NullTime
-	err := sc.Scan(&l.ID, &l.Code, &human, &l.BatchID, &l.CustomerID, &l.OutputMaterialID,
+	err := sc.Scan(&l.ID, &l.Code, &l.BatchID, &l.CustomerID, &l.OutputMaterialID,
 		&packSpec, &l.QtyBag, &netWeight, &producedAt, &l.Status, &remark, &created, &l.CreatedBy)
 	if err != nil {
 		return FgLot{}, err
 	}
-	l.Human, l.PackSpec, l.Remark = human, packSpec, remark
+	l.Human, _ = codec.ToHuman(l.Code)
+	l.PackSpec, l.Remark = packSpec, remark
 	if netWeight.Valid {
 		w := netWeight.Float64
 		l.NetWeight = &w
@@ -364,22 +366,21 @@ func scanFgLot(sc interface{ Scan(...interface{}) error }) (FgLot, error) {
 }
 
 const fgLotSelect = `
-SELECT id, code, COALESCE(code, ''), batch_id, customer_id, output_material_id,
+SELECT id, code, batch_id, customer_id, output_material_id,
        COALESCE(pack_spec, ''), qty_bag, net_weight, produced_at, status,
        COALESCE(remark, ''), created_at, created_by
   FROM b_fg_lot`
 
 func scanFgBag(sc interface{ Scan(...interface{}) error }) (FgBag, error) {
 	var b FgBag
-	var human string
 	var weight sql.NullFloat64
 	var created sql.NullTime
-	err := sc.Scan(&b.ID, &b.Code, &human, &b.FgLotID, &b.BagSeq, &weight,
+	err := sc.Scan(&b.ID, &b.Code, &b.FgLotID, &b.BagSeq, &weight,
 		&b.WeightIsAllocated, &b.Status, &created, &b.CreatedBy)
 	if err != nil {
 		return FgBag{}, err
 	}
-	b.Human = human
+	b.Human, _ = codec.ToHuman(b.Code)
 	if weight.Valid {
 		w := weight.Float64
 		b.WeightAllocated = &w
@@ -392,7 +393,7 @@ func scanFgBag(sc interface{ Scan(...interface{}) error }) (FgBag, error) {
 }
 
 const fgBagSelect = `
-SELECT id, code, COALESCE(code, ''), fg_lot_id, bag_seq, weight_allocated,
+SELECT id, code, fg_lot_id, bag_seq, weight_allocated,
        weight_is_allocated, status, created_at, created_by
   FROM b_fg_bag`
 
@@ -801,10 +802,20 @@ func (s *Store) FeedScan(ctx context.Context, batchID int64, in FeedInput, actor
 		weight = in.FeedWeight.String()
 	}
 
-	res, err := tx.ExecContext(ctx, `
+	// fed_at 为 NOT NULL（DEFAULT CURRENT_TIMESTAMP）⇒ 未指定时**省略该列**走库默认，
+	// 不得显式传 NULL。
+	var res sql.Result
+	if fedAt != nil {
+		res, err = tx.ExecContext(ctx, `
 INSERT INTO b_feed_record (batch_id, bag_id, feed_weight, fed_at, operator, remark, created_by)
 VALUES (?,?,?,?,?,?,?)`,
-		batchID, bagID, weight, fedAt, in.Operator, nullStr(in.Remark), actor.OpenID)
+			batchID, bagID, weight, fedAt, in.Operator, nullStr(in.Remark), actor.OpenID)
+	} else {
+		res, err = tx.ExecContext(ctx, `
+INSERT INTO b_feed_record (batch_id, bag_id, feed_weight, operator, remark, created_by)
+VALUES (?,?,?,?,?,?)`,
+			batchID, bagID, weight, in.Operator, nullStr(in.Remark), actor.OpenID)
+	}
 	if err != nil {
 		return FeedRecord{}, fmt.Errorf("写投料记录失败: %w", err)
 	}

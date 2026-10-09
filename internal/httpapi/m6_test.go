@@ -15,6 +15,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -628,9 +629,9 @@ func TestM6HTTPPermLevels(t *testing.T) {
 			t.Fatalf("★ production 在 %s 上不应是 NONE，实际 %v", code, v)
 		}
 	}
-	// production 的 prod.rework 必须含 INIT（LevelInit 守卫能过）
-	if fmt.Sprint(points["prod.rework"]) != "INIT" {
-		t.Fatalf("★★ production 的 prod.rework 应 INIT，实际 %v", points["prod.rework"])
+	// production 的 prod.rework 必须含 INIT（多角色并集下 qc=ALL 也会并进来）
+	if !strings.Contains(fmt.Sprint(points["prod.rework"]), "INIT") {
+		t.Fatalf("★★ production 的 prod.rework 应含 INIT，实际 %v", points["prod.rework"])
 	}
 
 	// 写入口 ALL：未登录 ⇒ 401；management 对 prod.batch.create 是 READ ⇒ POST 403 / GET 200
