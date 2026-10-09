@@ -11,6 +11,8 @@ import InspDetail from './components/InspDetail.vue'
 import Production from './components/Production.vue'
 import Shipment from './components/Shipment.vue'
 import Trace from './components/Trace.vue'
+import Report from './components/Report.vue'
+import Rpt from './components/Rpt.vue'
 
 const page = ref('recv')
 const me = ref(null)
@@ -61,6 +63,8 @@ async function logout() {
       <button :class="{ on: page === 'prod' }" @click="page = 'prod'">生产</button>
       <button :class="{ on: page === 'ship' }" @click="page = 'ship'">出货</button>
       <button :class="{ on: page === 'trace' }" @click="page = 'trace'">追溯</button>
+      <button :class="{ on: page === 'report' }" @click="page = 'report'">报告</button>
+      <button :class="{ on: page === 'rpt' }" @click="page = 'rpt'">报表</button>
       <button :class="{ on: page === 'md' }" @click="page = 'md'">主数据</button>
       <button :class="{ on: page === 'perm' }" @click="page = 'perm'">权限配置</button>
     </nav>
@@ -89,6 +93,8 @@ async function logout() {
     <Production v-else-if="page === 'prod'" :me="me" />
     <Shipment v-else-if="page === 'ship'" :me="me" />
     <Trace v-else-if="page === 'trace'" :me="me" />
+    <Report v-else-if="page === 'report'" :me="me" />
+    <Rpt v-else-if="page === 'rpt'" :me="me" />
     <PermissionAdmin v-else :me="me" />
   </main>
 </template>
