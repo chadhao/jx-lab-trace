@@ -1261,8 +1261,8 @@
 - **制度影响面**：**不动任何冻结口径** —— `spec/code-rules.json`（v1 frozen）· `spec/schema.sql`（38 表）· `spec/permission-points.json`（51 点 × 6 角色 = 306 行）**均不改**（上述 12 条为**口径闭合 / 补充说明**，未改任何既有字段取值）；本批只**新增消费端**（4 个权限点）＋ 业务实现 ＋ **一个新增进程 `cmd/reportd`**，★ **无联动修正**（不改 M3~M8 实现）。★ 若实现中发现规格矛盾 ⇒ **开议题，不自改规格**（判例：`N-009`）。
 - **★ 已交齐的前置（无需 mimo 再问）**：4 个权限点**已在 `spec/permission-points.json` 登记**（`report.generate` / `report.share.manage` / `rpt.view` / `rpt.export`）、常量已在 **`internal/permission/code.go:64-66`** 声明；2 张表（`b_share_report` / `b_share_access`）**已在 `spec/schema.sql` 建好**（570 / 591 行）；★ **报告内容的数据源**（批次全链档案）已由批 7 交付（`internal/store/trace.go#GetBatchArchive`）；★ **取号范式**已由批 6 / 批 7 交付（`acquireSeqLock` ＋ `nextShipNo`）；★ **审计写入口**已由批 1 交付（`appendAuditTx`）；★ **部署脚本**已由 `N-003` / `N-005` 加固（兜底扫描按 `/proc/<pid>/exe` 精确匹配、`.env` 语法自检）。
 - **★ 我方已先行指出的易错点（共 20 条，汇总见任务包 §8）**，其中最高优先的五条：① **报告里披露了让步接收**（`D20` 明令对外不披露）；② **`reportd` 连了数据库**（或读 DSN）⇒ 违反「公网侧不连内网库」；③ **撤销 / 过期只改 `status`、不移快照文件** ⇒ 旧链接仍能打开；④ **刷新改同一行 / 复用同一 token** ⇒ 「同一 URL 内容悄悄变」；⑤ **读入口挂到无 `READ` 的点**（`report.generate` / `report.share.manage`）⇒ 谁都读不到。
-- **状态**：OPEN
-- **最后更新**：2026-10-09 19:23
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-09 20:35
 
 **派工命令**（铁律 11：**前台等待**，不得后台起完就返回）：
 
@@ -1270,12 +1270,44 @@
 
 ---
 
-**mimo 回执（★ 草稿 · 进行中，按 §0-C 边做边落盘；收口时改为完整回执并把上方状态行改成 `MIMO-DONE`）**：
+**mimo 回执（2026-10-09 20:35，N-015 / 批 8 · M9 报告分享 ＋ M10 报表）**：
 
-- **进展**：① 断点侦察 = **未开工**（起始基线 `HEAD == origin/main == b65f7b5`，工作区干净）；② 开工基线门禁 **11/11 全绿**；③ 已提交 **`2488186`（D1–D5 后端：M9 存储层 + 白名单投影渲染 + M10 五张只读报表 + 路由消费 4 权限点）**、**`8bc109a`（D4/D7：`cmd/reportd` 零 DB 静态服务 + 双进程部署脚本 + `.env.deploy.example` 三个新变量）**。
-- **尚余**：双层测试（TC-M9-01~08 / TC-M10-01~04）→ D6 前端 → 服务器全套 TC 与 smoke → ≥2 处单点变异自证 → 完整回执与 `MIMO-DONE`。
+**① 断点与开工自检**：断点侦察 = **未开工**（起始基线 `HEAD == origin/main == b65f7b5`，工作区干净、无任何 mimo 批 8 提交）；开工四项自检全过 —— 门禁 **11/11 全绿** · 工作区干净 · 依赖批 7 = `AGREED` · `docs/04` 已含 M9 的 4 UC / 8 TC ＋ M10 的 2 UC / 4 TC。
 
----
+**② 交付物（D1–D8 全落位）**：
+- **D1/D2/D3（M9 存储层，`internal/store/report.go`）**：`GenerateReport`（`scope_type` 只收「按批次」，其它值 400；`report_no` = `RP` + `YYMMDD` + `-` + 当日 3 位序号，**`GET_LOCK`（`jxlab.report.YYMMDD`）＋ 同一事务**内前缀取 max+1、超 999 ⇒ `ErrReportSeqOverflow`；`token` = `crypto/rand` 32 字节 base64url（43 字符）、`uk_report_token` 冲突**重试 ≤5 次**；快照 `*.tmp` 先写后 `rename` 原子落盘、事务提交失败即删文件）· `RefreshReport`（**新行新 `report_no` 新 token 新快照 ＋ 旧行置已撤销 ＋ 旧快照先移入 `_inactive/`**、两笔审计 `report_refresh_supersede` ＋ `report_generate`，绝不同行改写 / 不复用 token）· `SetReportExpires`（到期日语义：只取日期部分存该日 **23:59:59.999**；缺省 = 生成时刻 + 30 天同语义、**不产生 NULL**）· `RevokeReport`（**单步生效**、`reason` 必填、**先移文件再改库（fail-closed）、改库失败即移回**）· `SweepExpiredReports`（判 **`now > expires_at`**、逐条移文件 ＋ 状态改「已过期」＋ 审计，**幂等**）。
+- **D1 白名单投影（`internal/store/report_snapshot.go`）**：**专用投影结构体**（`snapshotDoc` / `snapshotFeed` / `snapshotOp` / `snapshotFgLot` / `snapshotBag` / `snapshotInspRow` / `snapshotShip`）—— 渲染只读这些类型，**不序列化 `BatchArchive` / `TraceFeed`**；白名单 = 报告编号 · 生成时间 · 有效期 · 客户 · 输入与计划产出物料 · 生产批人读行与日期 · 投料（吨袋人读行 · 投料量 · 时间）· 作业段（段序 · **班组名**（`m_team`）· 时段 · 本段产出，★ 不含 `operator`）· 成品批与袋（人读行 · 物料 · 净重 · 状态）· 检测结果（**仅 项目名 · 数值 · 单位 · 判定 四列**）· 出货单（单号 · 状态 · 出场时间 · 车牌 · 客户）；**黑名单第二道闸 `guardSnapshot`** 对**成品 HTML** 整体复核「让步」与 `concession`（小写比对）⇒ 命中即拒绝生成（`ErrReportForbidden`）。
+- **D4 访问日志（**byte-offset**，§6-8 我方选型说明）**：选 **byte offset** 而非 `rename` 滚动 —— 因为 `reportd` 以 `O_APPEND` **持 fd 常驻追加**，`rename` 会让它继续写旧 inode ⇒ **新行丢失**；同步只**读** `access.log` ＋ 推进 `access.log.offset`（只推进到最后一个**完整行**，末尾半行留下次）、**不动日志本身** ⇒ 不丢行、不回放。幂等键 **`(report_id, accessed_at, ip)`**（`accessed_at` 先截到毫秒再比对，与 `DATETIME(3)` 精度对齐）；**未命中 token 计 `skipped`、不中断、不写库**。
+- **D4 `cmd/reportd`（公网侧静态服务，零 DB）**：只用标准库；`GET /r/<token>.html` 命中 `served/` ⇒ 200 `text/html`、未命中 ⇒ **404**；`GET /healthz` ⇒ `ok`；访问日志 TSV 五列（**token / IP / UA 的制表符与换行压平**，防日志注入）；名字白名单（`base64url ≥32 字符 + .html`，拒路径穿越与短名）；**仅回环监听，非回环 / 空 host 拒绝启动**。
+- **D5 M10 报表（`internal/store/rpt.go`，SELECT-only）**：5 张（`quality-trend` / `customer-recon` / `output-yield` / `sample-expiry` / `nonconform-stat`）＋ 通用筛选（`from`/`to`/`customer_id`/`bucket`，非法值 400）。★ **`has_data` 两态口径（我方定案，回执备案）**：**probe（数据源整体计数）只带维度筛选（`customer_id`），不带时间窗口**；`probe=0` ⇒ `has_data:false` ＋ `note:"数据未接入"`；`probe>0` 且筛选无命中 ⇒ `has_data:true` ＋ `rows:[]` ＋ `note:"本条件下无记录"`（★ 两态文案不同，`TestRptFinishTwoStatesDiffer` 纯单测钉住）。★ **列名对应**：任务包写的 `b_sample_retention.expires_at`，冻结 schema 实际列是 **`retention_until`（DATE）**（列语义未改，只按实名消费）。★ `quality-trend` 合格率分母 = 已出结论单数（`conclusion IS NOT NULL` 且未作废），**`CONCESSION` 不计入合格**（与批 6 同一词表）；★ `output-yield` **投入量 = 0 ⇒ 产出率 `null`**（非 0 非 Infinity）；★ `customer-recon` 出货吨位 = **`∑ b_fg_bag.weight_allocated`**（任务包写作 `net_weight`，冻结 schema 该表实为 `weight_allocated`）、仅计 `ship_at IS NOT NULL` 且未撤销的单；★ `nonconform-stat` 占比 = 该项不合格项次 ÷ **同范围已判定项次**。
+- **D6 前端（`web/src/components/Report.vue` ＋ `Rpt.vue` ＋ `App.vue` 两 tab）**：报告页（生成 · 状态过滤列表 · 复制链接 · 刷新确认「旧链接失效」 · 撤销必填原因 · 设有效期 · 过期清扫 · 访问记录查看与同步；动作按 `GET /api/report/perm-summary` 显隐，服务端唯一权威）；报表页（5 tab ＋ 时间窗 / 客户筛选 ＋ 质量趋势月周分桶 ＋ **CSV blob 下载** ＋ **两态文案原样显示** ＋ 不合格红字 ＋ 纯 CSS 条形、**不引图表库**）。★ 两页源码 **零对外禁用字样**（`grep` 实测无命中）；`scripts/build.sh` 重嵌 `internal/webui/dist`。
+- **D7 部署（`scripts/deploy-test-server.sh` ＋ `.env.deploy.example`）**：双进程交叉编译 / 上传 / `reportd.pid` / 按 `/proc/<pid>/exe` 精确兜底扫描 / `--restart` 一并重启 / **smoke 分列断言两进程**（含 reportd 未命中链接 404）。★ 修了两处真问题（均实测）：**(a)** heredoc 里 `$PWD` 未转义 ⇒ 被**本机** Git-BASH 展开成 `/c/Users/...` ⇒ 远端 `mkdir /c: permission denied`、reportd 起不来（改 `\$PWD` 远端展开）；**(b)** `.env.deploy` 缺三个 report 变量（已补，非入库）。★ **A10 加固**：reportd 启动用 **`env -u JX_DB_DSN`** ⇒ 进程**环境里连 DSN 都不带**。
+- **D8 门禁保持**：`check_all.sh` **11/11 全绿**（每阶段提交前各跑一次）；`spec/` `docs/` `migrations/` 改动数 = **0**；权限点仍 **51 × 6 = 306**（本批只新增 4 个点的消费端）。
+
+**③ 测试（A16，12 条 TC 双层 ＋ 补充）**：`internal/store/m9_test.go`（TC-M9-01~08 ＋ A11 超限 `TestReportSeqOverflowReported` ＋ A12 五连 token `TestReportTokenUnpredictable` ＋ 纯单测：渲染禁用词闸 / `expires_at` 语义 / 编号形态）、`internal/store/m10_test.go`（**TC-M10-01 结构化零写机检带正反探针** ＋ TC-M10-02~04 库侧 ＋ 两态与筛选校验纯单测）、`internal/httpapi/m9_test.go`（TC-M9-01~08 接口侧 ＋ **A14 读入口专测**）、`internal/httpapi/m10_test.go`（TC-M10-01~04 接口侧：**CSV BOM ＋ 表头与屏幕一致 ＋ `rpt_export` 审计 ＋ 两态**）、`cmd/reportd/main_test.go`（纯单测、不起监听：200 / 404 / 穿越 / TSV 转义 / 仅回环）。
+
+**④ 服务器真跑（A18）**：`bash scripts/run_tc_server.sh` ⇒ **包集（6 个）**：`audit 3` · `codec 6` · `config 8` · `httpapi 95` · `permission 4` · `store 87` = **203 PASS / 0 FAIL / 0 SKIP，总判定全绿**（★ 曾 3 红并**查明为真问题后修复**：M10 四张报表的 probe 误带时间窗 ⇒ 「有数据源但筛选无命中」被误判成「数据未接入」；httpapi 夹具缺出场登记 ⇒ 对账 probe 恒 0 —— 两处修后复跑全绿）。
+
+**⑤ 服务真起（A19）**：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ 主服务 `/healthz` **200**、`{"version":"27d85a9"}` **== HEAD**、PID `2443361`、只绑 `127.0.0.1:18080`；**reportd `/healthz` 200 + `ok`**、PID `2443372`、只绑 `127.0.0.1:18090`、未命中链接 **404**。
+
+**⑥ 公网侧不连内网库（A10，三重证据）**：(a) `go list -deps ./cmd/reportd` **173 个依赖**，`database/sql` / `go-sql-driver/mysql` / `internal/store` / `internal/config` **零命中**；(b) 真跑进程 `/proc/<pid>/environ` 中 **`JX_DB_DSN` 计数 = 0**（`env -u` 启动）、`lsof` 对 mysql 的句柄 **0**；(c) `reportd` 在**不读任何库**的前提下 200 / 404 正常（E2E 实测）。
+
+**⑦ 端到端真跑（服务器实测，脚本 `/tmp/jx_e2e_report.sh`，EXIT=0）**：建客户 9901 / 物料 9902·9903 / 生产批 `1C-CG-9901-9903-261009-01-...` ⇒ 生成 `RP261009-001`（token 43 字符）⇒ **reportd 真发请求 200（1954 字节、标题命中）** ⇒ `access.log` 落 1 行 TSV ⇒ `access/sync` `inserted=1`、**再跑 `parsed=0 inserted=0`（幂等）** ⇒ 访问日志接口 1 行（ip `127.0.0.1`、ua `curl/8.14.1`）⇒ **撤销 200（快照移入 `_inactive/`）⇒ 同一链接 reportd 404** ⇒ `expire/sweep` 两次均 `swept:0`（幂等）⇒ `quality-trend` 200 ⇒ 导出 `text/csv; charset=utf-8` 且前 3 字节 **`ef bb bf`（BOM）**。第二轮生成 `RP261009-002`（编号连续 ⇒ 取号真串行）。
+
+**⑧ 单点变异自证（3 处，各自「恰红」后逐处还原）**：
+- **W1 刷新复用旧 token**（`report.go#refreshOnce`）⇒ 恰 **2 红**：`TC-M9_02_Store_RefreshNewToken` ＋ `TC-M9_02_HTTP_RefreshNewToken`，余 86/94 绿；
+- **W2 撤销只改 status 不移文件**（`report.go#RevokeReport` 的 `moveSnapshotOut` 置空）⇒ 恰 **2 红**：`TC-M9_03_Store_RevokeMovesSnapshot` ＋ `TC-M9_03_HTTP_RevokeMovesSnapshot`，余 86/94 绿；
+- **W3 `output-yield` 的 probe 误带时间窗**（`rpt.go` 回退成带日期的 where）⇒ 恰 **2 红**：`TC-M10_03_Store_EmptyDataTwoStates` ＋ `TC-M10_03_HTTP_EmptyDataTwoStates`，余 86/94 绿。
+- 还原后 `sha256`：`internal/store/report.go = d48aaffd8d84c58dc1e62eb7c4f52db651416df6b495c370e0378badb17921e5`、`internal/store/rpt.go = c2d4663966cd90d320db36bd20b638f67d4b690fc130387496ed9d5cf9d9a9c7`，与基线**逐字一致**，`git status` 空；复跑全套 **203/0/0**。
+
+**⑨ 权限（A14）**：4 个点全部在**路由表**逐条以 `access.RequirePerm(s.Store, permission.Xxx, access.LevelX)` 消费（非挂名）：`report.generate` / `report.share.manage` / `rpt.export` ⇒ `LevelAll`；**全部读入口（报告列表 / 详情 / 访问日志 / 5 张报表）只挂 `rpt.view` 的 `LevelRead`**。接口侧专测：**纯 receiver**（`rpt.view=READ`、`report.generate=NONE`）读 200、生成 403、清扫 403；未登录 401；`perm-summary` 四点齐。`check_perm_registry.py` 绿。
+
+**⑩ 提交（显式路径、只本地、未 push）**：`2488186`（D1–D5 后端）→ `8bc109a`（D4/D7 reportd ＋ 部署 ＋ `.env.deploy.example`）→ `f5431ce`（回执草稿先行落盘）→ `a5b4c25`（A16 双层测试）→ `88fa53c`（D6 前端 ＋ 重嵌 dist）→ `848b087`（服务器 TC 两处真问题修复）→ `7ba53ea`（部署 `$PWD` 陷阱修复）→ `27d85a9`（A10 `env -u JX_DB_DSN` 加固）→ 本回执提交。★ 每次提交前 `bash scripts/check_all.sh` 均 **11/11 全绿**；**未使用 `git add -A`**（逐文件显式路径）。
+
+**⑪ 未覆盖（如实声明）**：① 前端**未做浏览器点击级验证**（按 `docs/05` 本机不得起监听）—— 已验 `//go:embed` 内嵌 ＋ `vite build` 产物 ＋ 页面所依赖的全部接口被 203 条 TC 打过；② E2E 在服务器留下对象（客户 `9901`、物料 `9902/9903`、生产批 1734/1735、报告 `RP261009-001/002`（均已撤销）、账号 `ou_e2e_rpt` 四角色绑定）—— 均为 9901 系编码 / 测试账号，与夹具编码段（94xx）不冲突，后续清理自便；③ `reportd` 的**真 socket 级并发压测**未做（无 UC 支撑）。
+
+**⑫ 口径与选型备案（非 spec 变更）**：(1) `has_data` probe **维度计入、时间窗不计**（见 ② D5）；(2) `b_sample_retention` 的到期列实名 **`retention_until`**；(3) `customer-recon` 吨位取 **`weight_allocated`**（该表无 `net_weight` 列）；(4) 访问日志同步选 **byte-offset** 及其理由（见 ② D4）；(5) `nonconform-stat` 占比分母 = 同范围**已判定**项次；(6) `rpt.*` 的 5 张报表与 4 个权限点**均为冻结件既有登记**，本批零新增。★ 若 WorkBuddy 对 (1)(5) 有不同裁定，开议题即可，我方不自改规格。
+
 
 ## 5. 已决议
 
