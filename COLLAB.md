@@ -941,8 +941,8 @@
 - **制度影响面**：**不动任何冻结口径** —— `spec/code-rules.json`（v1 frozen）· `spec/schema.sql`（38 表）· `spec/permission-points.json`（51 点 × 6 角色 = 306 行）**均不改**（上述 7 条为**口径闭合 / 补充说明**，未改任何既有字段取值）；本批只**新增消费端**（11 个 `insp.*` 权限点）与业务实现，外加**一处最小联动修正**（M3 退车前置，见上第 7 条）。★ 若实现中发现规格矛盾 ⇒ **开议题，不自改规格**（判例：`N-009`）。
 - **★ 已交齐的前置（无需 mimo 再问）**：11 个 `insp.*` 权限点**已在 `spec/permission-points.json` 登记**，常量已在 `internal/permission/code.go:46-56` 声明；3 张表（`b_inspection` / `b_inspection_result` / `b_inspection_file`）**已在 `spec/schema.sql` 建好**（474 / 504 / 524 行）；★ 权限引擎已支持 `INIT` / `APPROVE`（`internal/permission/engine.go`：`LevelInit` / `LevelApprove`）⇒ 紧急放行的「发起 ≠ 审批」**可直接由权限点拆分落实**，无需扩展引擎；★ 判定限解析已由批 2 交付（`internal/store/limits.go`）；★ 审计接口已由批 1 交付（`internal/audit` + `store.AppendAudit`）。
 - **★ 我方已先行指出的易错点（共 14 条，汇总见任务包 §8）**，其中最高优先的四条：① **检测挂大样、不挂袋**（§6-5 / A2）；② **结果录入必须带 `AND state='未测'` 守卫并校验受影响行数**（§6-7 / A13 / A19）；③ **紧急放行必须「权限层 + 服务层同人校验」双保障**，且入口级别**不得**用 `ALL`（§6-11 / §6-12 / A11）；④ **「尚未取样」是正常态，列表不得把它过滤掉**（§6-24 / A2）。
-- **状态**：OPEN
-- **最后更新**：2026-10-09 10:54
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-09 12:0x
 
 **派工命令**（铁律 11：**前台等待**，不得后台起完就返回）：
 `bash scripts/drive_mimo.sh N-012 MIMO-NEXT-BATCH-05.md 5`
@@ -969,6 +969,20 @@
 - **★ 本轮续派措施（三条）**：① 工作区**保留** WIP（在既有成果上继续，**不推倒重来**）；② `MIMO-NEXT-BATCH-05.md` **新增 §0 续派说明**（写明现状、剩余工作、行尾避坑）；③ ★ **新增硬要求「分阶段本地提交」** —— 每完成一块（D8 前端 / 服务器 TC / 变异自证）即**显式路径提交一次**，使任何一次回收**最多只丢最后一块**（上轮零提交，只能靠工作区残留抢救）。
 - **剩余工作**：**D8 前端**（`web/src/components/` 现**无任何 M5 组件**、`App.vue` 无 M5 导航）· **服务器全套 TC**（A17）· **单点变异 ≥2 处** · **A1–A20 自检** · **回执 + 状态改 `MIMO-DONE`** · **提交**。
 - **状态**：`N-012` 保持 **`OPEN`**（未验收）；本轮**续派同一议题**。
+
+**★★ 交付回执（mimo · 2026-10-09 12:0x · 续派轮完成）**
+
+- **提交序列（显式路径、只本地不 push、分阶段）**：
+  1. `753dd6b` —— 后端 D1–D7（`internal/store/inspection.go` 1488 行 · `internal/httpapi/insp.go` 583 行 · 联动修正 `receiving_bag.go` · 附件上限 `config.go`）+ 双层测试（`store/m5_test.go` + `httpapi/m5_test.go`，TC-M5-01~14）+ **D8 前端**（`InspTasks.vue` 任务列表页 · `InspDetail.vue` 检测单页 · `App.vue` 检测 tab · `api.js` upload() · `scripts/build.sh` 产物已重嵌 `internal/webui/dist`）。
+  2. `a3567d2` —— TC-M5-10 修正（「未发起先审批 409」改用有 `APPROVE` 权限的账号过权限层；qc 在该点为 `NONE`，原写法被权限层先拦 403 走不到服务层）。
+  3. 本回执提交（COLLAB.md N-012 段回执 + 状态改 `MIMO-DONE`）。
+- **★ A17 服务器全套 TC（`bash scripts/run_tc_server.sh`，最终态复跑）**：**包集自动发现 6 个** —— `internal/audit` **PASS=3/FAIL=0/SKIP=0** · `internal/codec` **PASS=6/0/0** · `internal/config` **PASS=8/0/0** · `internal/httpapi` **PASS=57/0/0** · `internal/permission` **PASS=4/0/0** · `internal/store` **PASS=39/0/0** ⇒ **总计 117 PASS / 0 FAIL / 0 SKIP，总判定全绿**。
+- **★ 单点变异自证（≥2 处，各自仅预期用例红、还原后 sha256 与基线逐字一致）**：
+  1. **变异 1（A9 / 让步四字段）**：移除 `SetConclusion` 的「四字段必填」校验 ⇒ 服务器 TC **仅 `TestTC_M5_08_HTTP_ConcessionFourFieldsEachRequired` 红**（httpapi FAIL=1，其余 5 包全绿）；还原后 `internal/store/inspection.go` **SHA256 = `850420BAEBFDC906F2DCE7FCCCDAC6A070FDEA4CD391C6D9D5E7F8A0BB536B06`**（与变异前基线一致）。
+  2. **变异 2（A13/A19 / 结果录入守卫）**：整体移除录值双层守卫（`curState != 未测` pre-check + `UPDATE ... AND state='未测'`）⇒ 服务器 TC **`TestTC_M5_12_HTTP_CorrectIsVoidAndNewNotInPlace` + `TestTC_M5_12_Store_GuardedUpdateAndVoidNew` 双层红**（httpapi/store 各 FAIL=1，其余全绿）；★ 初版只去 UPDATE 守卫时**不红**（pre-check 仍拦）—— 证明实现是**双层防线**，单去一层测不出来；还原后 SHA256 同上（`850420BA…6B06`），`git diff` 为空。
+- **★ A1–A20 自检结论：全部满足**。要点：A2 挂大样/无大样 400（`CreateInspection` + TC-M5-14）；A3~A6 三态/加删项（TC-M5-01~04，按本单作用域计数）；A7 附件 20MB 过/21MB 拒（`maxBytes+4KB` 预检 + 落盘精确复核，TC-M5-05/06）；A8 `CONCESSION` 字面量（TC-M5-07）；A9 四字段（TC-M5-08 + 变异 1）；A10 双签两入口（TC-M5-09，qc/production 分签）；A11 发起≠审批双保障（TC-M5-10：权限层 403 + 服务层同人 403，入口分别 `LevelInit`/`LevelApprove`）；A12 复检原单逐字不变（TC-M5-11）；A13 修正作废+新开（TC-M5-12 + 变异 2）；A14 三来源并集过滤（TC-M5-13）；A15 11 个 `insp.*` 点集中在 `mountInsp` 路由表逐点消费（`check_perm_registry.py` 绿）；A16 14 条 TC 均有 `TestTC_M5_01~14` 自动化（httpapi 14 + store 5 双层形态）；A17 见上；A18 联动修正（`receiving_bag.go:566` `NOT EXISTS` 排除作废单 + `TestTC_M5_18_Store_ReturnTruckExcludesVoidedInspection`，M3 既有 TC 全绿）；A19 守卫读实现（`AND state='未测'`+行数==1、`conclusion IS NULL`、`disposition IS NULL`、双签列空守卫）；A20 两笔审计 actor 不同（TC-M5-10 断言 init=qc、approve=management）。
+- **★ 门禁**：提交前复跑 `bash scripts/check_all.sh` ⇒ **必绿 11/11 全绿（exit 0）**，2 会报项无命中。
+- **状态**：`N-012` → **`MIMO-DONE`**（待 WorkBuddy 独立验收 → `AGREED`）。
 
 ---
 
