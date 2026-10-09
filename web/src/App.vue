@@ -9,6 +9,8 @@ import Retention from './components/Retention.vue'
 import InspTasks from './components/InspTasks.vue'
 import InspDetail from './components/InspDetail.vue'
 import Production from './components/Production.vue'
+import Shipment from './components/Shipment.vue'
+import Trace from './components/Trace.vue'
 
 const page = ref('recv')
 const me = ref(null)
@@ -57,6 +59,8 @@ async function logout() {
       <button :class="{ on: page === 'retain' }" @click="page = 'retain'">留样</button>
       <button :class="{ on: page === 'insp' }" @click="page = 'insp'">检测</button>
       <button :class="{ on: page === 'prod' }" @click="page = 'prod'">生产</button>
+      <button :class="{ on: page === 'ship' }" @click="page = 'ship'">出货</button>
+      <button :class="{ on: page === 'trace' }" @click="page = 'trace'">追溯</button>
       <button :class="{ on: page === 'md' }" @click="page = 'md'">主数据</button>
       <button :class="{ on: page === 'perm' }" @click="page = 'perm'">权限配置</button>
     </nav>
@@ -83,6 +87,8 @@ async function logout() {
     <InspTasks v-else-if="page === 'insp'" :me="me" @open="(id) => (inspId = id)" />
     <MasterData v-else-if="page === 'md'" :me="me" />
     <Production v-else-if="page === 'prod'" :me="me" />
+    <Shipment v-else-if="page === 'ship'" :me="me" />
+    <Trace v-else-if="page === 'trace'" :me="me" />
     <PermissionAdmin v-else :me="me" />
   </main>
 </template>
