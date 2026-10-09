@@ -229,6 +229,14 @@ cmd_status() {
 
 # ── ★ 自测：把探针固化进脚本，任何人可复跑 ────────────────────────────
 cmd_selftest() {
+  # ★★ 自测**会清场**（rm -rf 锁目录）⇒ 若当前有**活跃的他人锁**，必须**拒绝运行**。
+  #   实测踩过（2026-10-09，dogfooding 时当场抓到）：取了写者锁后跑 `selftest`，
+  #   锁被 selftest 的 `rm -rf` 清掉 ⇒ 随后 `renew-writer` / `release` 均报「无锁」
+  #   ⇒ **保护在不知不觉中失效**。判据：**会清场的自测，不得在持锁时运行**。
+  if _lock_is_live; then
+    echo "✗ 当前有活跃锁（kind=$(_lock_kind) owner=$(_read owner)）—— 自测会清场，拒绝在持锁时运行"
+    return 1
+  fi
   local pass=0 fail=0
   _t() { # _t <期望RC> <描述> <命令...>
     local want="$1" desc="$2"; shift 2
