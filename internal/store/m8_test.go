@@ -500,10 +500,10 @@ func TestM8BackwardInputGuards(t *testing.T) {
 	if _, err := st.TraceBackward(ctx, 0, ""); !errors.Is(err, ErrProdBadInput) {
 		t.Fatalf("★ 缺入参应 ErrProdBadInput，实际 %v", err)
 	}
-	// 非 D 类码 ⇒ 400
+	// 非 D 类码 ⇒ 400（B 类深度 2 ⇒ SEQ3 恒 000）
 	tonBag, err := codec.Generate(codec.Segments{
 		T: "B", BT: BizTypeCG, Customer: m6CustCode, Material: m6InMatCode,
-		Date: m6DateSeg, SEQ1: "01", SEQ2: "001", SEQ3: "001",
+		Date: m6DateSeg, SEQ1: "01", SEQ2: "001", SEQ3: "000",
 	})
 	if err != nil {
 		t.Fatalf("生成吨袋码失败: %v", err)

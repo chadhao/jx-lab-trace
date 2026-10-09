@@ -652,10 +652,10 @@ func TestM7ShipmentBagCodeGuards(t *testing.T) {
 	st, cust1, _, outMat := m7Fixture(t)
 	ctx := context.Background()
 
-	// 吨袋码（T=B）⇒ 400
+	// 吨袋码（T=B）⇒ 400（B 类深度 2 ⇒ SEQ3 恒 000）
 	bagB, err := codec.Generate(codec.Segments{
 		T: "B", BT: BizTypeCG, Customer: m7CustCode, Material: m7InMatCode,
-		Date: m7BatchDateSeg, SEQ1: "01", SEQ2: "001", SEQ3: "001",
+		Date: m7BatchDateSeg, SEQ1: "01", SEQ2: "001", SEQ3: "000",
 	})
 	if err != nil {
 		t.Fatalf("生成吨袋码失败: %v", err)

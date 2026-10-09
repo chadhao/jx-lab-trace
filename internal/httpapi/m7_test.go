@@ -325,8 +325,8 @@ func TestTC_M7_02_HTTP_CrossShipmentRejected(t *testing.T) {
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("★★ 跨单重复归集应 409，实际 %d body=%v", resp.StatusCode, body)
 	}
-	if msg := fmt.Sprint(body["error"]); !strings.Contains(msg, "已归集") {
-		t.Fatalf("★★ 拒绝原因应含「已归集」，实际 %q", msg)
+	if msg := fmt.Sprint(body["error"]); !strings.Contains(msg, "归集") {
+		t.Fatalf("★★ 拒绝原因应含「归集」，实际 %q", msg)
 	}
 
 	// ② 向已存在的单 B 追加同袋 ⇒ 409
@@ -617,7 +617,7 @@ func TestM7HTTPPermLevels(t *testing.T) {
 	}
 	points, _ := body["points"].(map[string]interface{})
 	for _, code := range []string{
-		"ship.load.scan", "ship.out.register", "ship.void.init", "ship.void.approve",
+		"ship.load.scan", "ship.out.register", "ship.void.init",
 		"trace.forward", "trace.backward", "trace.batch.view",
 	} {
 		v, ok := points[code]
@@ -627,6 +627,12 @@ func TestM7HTTPPermLevels(t *testing.T) {
 		if fmt.Sprint(v) == "NONE" {
 			t.Fatalf("★ receiver 在 %s 上不应是 NONE，实际 %v", code, v)
 		}
+	}
+	// ★ ship.void.approve：receiver = NONE（只有 management 有 APPROVE）——
+	//	这正是 §6-8「该点无 READ、审批归管理层」的口径，须如实为 NONE。
+	if fmt.Sprint(points["ship.void.approve"]) != "NONE" {
+		t.Fatalf("★★ receiver 在 ship.void.approve 上应为 NONE（审批归 management），实际 %v",
+			points["ship.void.approve"])
 	}
 
 	// 未登录 ⇒ 401

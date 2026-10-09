@@ -510,14 +510,16 @@ SELECT g.id, g.code, g.truck_lot_id, COALESCE(t.code, ''),
 	if err != nil {
 		return nil, fmt.Errorf("反向追溯查询失败: %w", err)
 	}
-	defer rows.Close()
-	out := []TraceFeed{}
+	// ★ 先把投料行扫进内存再关闭 rows —— MySQL driver 在同一 Tx 上
+	//	不允许 rows 未读完时嵌套发新查询（实测 busy buffer / bad connection）。
+	base := []TraceFeed{}
 	for rows.Next() {
 		var f TraceFeed
 		var nw sql.NullFloat64
 		var fedAt sql.NullTime
 		if err := rows.Scan(&f.BagID, &f.BagCode, &f.TruckLotID, &f.TruckCode,
 			&f.Customer, &nw, &fedAt); err != nil {
+			rows.Close()
 			return nil, fmt.Errorf("读取投料失败: %w", err)
 		}
 		f.BagHuman, _ = codec.ToHuman(f.BagCode)
@@ -529,7 +531,17 @@ SELECT g.id, g.code, g.truck_lot_id, COALESCE(t.code, ''),
 			t := fedAt.Time
 			f.FedAt = &t
 		}
-		// 车次的现行检测结果 + 紧急放行（均复用既有实现）
+		base = append(base, f)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	// 第二阶段：rows 已关闭，再逐车次查现行检测单 + 紧急放行（复用 M5/M6 实现）
+	out := make([]TraceFeed, 0, len(base))
+	for _, f := range base {
 		insp, err := traceInspectionTx(ctx, tx, f.TruckLotID)
 		if err != nil {
 			return nil, err
@@ -537,7 +549,7 @@ SELECT g.id, g.code, g.truck_lot_id, COALESCE(t.code, ''),
 		f.Inspection = insp
 		out = append(out, f)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // traceInspectionTx 读该车次的现行检测单（含结果数值）+ 生效紧急放行留痕。
