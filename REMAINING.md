@@ -13,8 +13,8 @@
 | 批 4 | M4 取样与留样 | ✅ **已完成**（议题 `N-011` ⇒ `AGREED`，2026-10-09 10:44 独立验收通过；服务器真跑 TC **97 PASS / 0 FAIL**（自动发现 6 包）；服务真起 `/healthz` 200 且 `version == HEAD`；WorkBuddy 自做 2 处单点变异） |
 | 批 5 | M5 检测 | ✅ **已完成**（议题 `N-012` ⇒ `AGREED`，2026-10-09 12:02 独立验收通过；★ 首次派工被整树回收、续派后交付 `30249d3`；服务器真跑 TC **117 PASS / 0 FAIL / 0 SKIP**（自动发现 6 包）；服务真起 `/healthz` 200 且 `version == HEAD`；WorkBuddy 自做 2 处单点变异） |
 | 批 6 | M6 生产与谱系 | ✅ **已完成**（议题 `N-013` ⇒ `AGREED`，2026-10-09 13:10 独立验收通过；★ 交付 5 次分阶段提交、第 2 次 attempt 跑通；服务器真跑 TC **141 PASS / 0 FAIL / 0 SKIP**（自动发现 6 包）；服务真起 `/healthz` 200 且 `version == HEAD`；WorkBuddy 自做 2 处单点变异） |
-| 批 7 | M7 出货 + M8 追溯 | ★ **已派工**（议题 `N-014`，任务包 `MIMO-NEXT-BATCH-07.md`，2026-10-09 14:2x，依赖批 6）—— 前置已齐：门禁 11/11 绿 · 批 6 = `AGREED` · `docs/04` 含 **M7 的 3 UC / 6 TC ＋ M8 的 3 UC / 5 TC**（共 6 UC / 11 TC，`check_uc_tc.py` 绿）· 7 个权限点（4 `ship.*` ＋ 3 `trace.*`）**已在冻结件登记** · 2 张表（`b_shipment` / `b_shipment_item`）**已就位**；★ 口径闭合 13 条 ＋ 易错点 18 条 |
-| 批 8 | M9 报告分享 + M10 报表 | 待派工 |
+| 批 7 | M7 出货 + M8 追溯 | ✅ **已完成**（议题 `N-014` ⇒ `AGREED`，2026-10-09 19:23 独立验收通过；服务器真跑 TC **170 PASS / 0 FAIL / 0 SKIP**（自动发现 6 包）；服务真起 `/healthz` 200 且 `version == HEAD`；WorkBuddy 自做 2 处单点变异；★ mimo 回执缺位（驱动被整树回收）⇒ 由独立验收补位；★ 收货→取样→检测→生产→出货→追溯 **全链已打通**） |
+| 批 8 | M9 报告分享 + M10 报表 | ★ **已派工**（议题 `N-015`，任务包 `MIMO-NEXT-BATCH-08.md`，2026-10-09 19:2x，依赖批 7；**本期最后一批**）—— 前置已齐：门禁 11/11 绿 · 批 7 = `AGREED` · `docs/04` 含 **M9 的 4 UC / 8 TC ＋ M10 的 2 UC / 4 TC**（共 6 UC / 12 TC，`check_uc_tc.py` 绿，UC 49 / TC 96）· 4 个权限点（`report.generate` / `report.share.manage` / `rpt.view` / `rpt.export`）**已在冻结件登记** · 2 张表（`b_share_report` / `b_share_access`）**已就位**；★ 口径闭合 12 条 ＋ 易错点 20 条；★ **一期以 `cmd/reportd` 承接静态服务（顶替 Caddy —— 无免密 sudo）** |
 
 ## 2. 待外部输入（不阻塞开发）
 
