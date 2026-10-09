@@ -1060,12 +1060,34 @@
 - **制度影响面**：**不动任何冻结口径** —— `spec/code-rules.json`（v1 frozen）· `spec/schema.sql`（38 表）· `spec/permission-points.json`（51 点 × 6 角色 = 306 行）**均不改**（上述 10 条为**口径闭合 / 补充说明**，未改任何既有字段取值）；本批只**新增消费端**（6 个 `prod.*` 权限点）与业务实现，外加**一处最小联动修正**（M3 退车前置，见上第 10 条）。★ 若实现中发现规格矛盾 ⇒ **开议题，不自改规格**（判例：`N-009`）。
 - **★ 已交齐的前置（无需 mimo 再问）**：6 个 `prod.*` 权限点**已在 `spec/permission-points.json` 登记**，常量已在 `internal/permission/code.go:40-45` 声明；6 张表（`b_production_batch` / `b_batch_operation` / `b_feed_record` / `b_fg_lot` / `b_fg_bag` / `b_rework`）**已在 `spec/schema.sql` 建好**（296 / 312 / 329 / 344 / 363 / 378 行）；★ **码引擎已由批 3 交付**（`internal/codec`：`Generate` / `Parse` / `ToHuman` / `FromHuman` / `ObjectOf`），且 `spec/code-rules.json#sample_vectors` 已含 **`C`/`D`/`E` 三条逐字可核算向量**；★ **现行检测单判定**已由批 5 交付（`inspection.go#currentInspectionIDTx`）；★ **紧急放行落痕**已由批 5 交付（`s_audit_log`，`action='urgent_release_init' / 'urgent_release_approve'`）；★ 审计接口已由批 1 交付（`internal/audit` + `store.AppendAudit`）。
 - **★ 我方已先行指出的易错点（共 15 条，汇总见任务包 §8）**，其中最高优先的五条：① **投料不写 `b_feed_record`**（或另建表 / 把谱系编进码）；② **把「未出结论不得投料」判成只看袋**（应看**袋所属车次**的现行检测单）；③ **紧急放行只有 `init` 就放行**；④ **`D`/`E` 的序 1 用自己流水 / 日期段用生成当日**；⑤ **把产出数据也写进 `b_production_batch`**（违反 D23）。
-- **状态**：OPEN
-- **最后更新**：2026-10-09 12:30
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-09 12:59
 
 **派工命令**（铁律 11：**前台等待**，不得后台起完就返回）：
 
 `bash scripts/drive_mimo.sh N-013 MIMO-NEXT-BATCH-06.md 5`
+
+---
+
+**mimo 回执（2026-10-09 12:59 · 批 6 / `N-013`）**
+
+- **交付提交（3 次分阶段、显式路径、未 push）**：`cb7ac10` D1–D6 后端 + store/httpapi **双层测试**（+3771 行：`internal/store/production.go` 新建 · `receiving_bag.go` 联动修正 · `internal/httpapi/prod.go` 新建 · `server.go` 挂 `mountProd` · `recv.go` 接 `ErrTruckFed`→409 · 两个 `m6_test.go`）→ `818c3ca` 服务器 TC 全绿修复（human 改由 `codec.ToHuman` 派生 · `fed_at` NOT NULL 时省列走库默认 · perm-summary 断言按多角色并集含 `INIT`）→ `e3e9d54` **D7 前端**「生产」页 + `build.sh` 重嵌 `internal/webui/dist`（`index-C7Ln-uB2.js`）。
+- **A1 门禁**：`bash scripts/check_all.sh` ⇒ **必绿 11/11 全绿**（另 2 会报项无命中）；提交前均复跑。
+- **A17 服务器全套 TC**（`bash scripts/run_tc_server.sh`，★ 包集**自动发现 6 个**：`audit codec config httpapi permission store`）⇒ **全绿**：audit **PASS=3** · codec **6** · config **8** · httpapi **68** · permission **4** · store **52** —— 全部 **FAIL=0 SKIP=0**，**合计 141 PASS / 0 FAIL / 0 SKIP**（★ 四处变异逐一还原后复跑仍为此数）。
+- **A18 服务真起**：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ `/healthz` **200** 且 `version == e3e9d54 == HEAD`；监听 **127.0.0.1:18080**（只绑回环）。
+- **★★ 单点变异自证（4 处；每处改完跑 6 包全量，除下表所列外全部保持绿；逐处还原后 sha256 与基线逐字一致）**：
+
+  | # | 变异点 | 变红的用例（仅此） | 对应判据 | 还原后 sha256 |
+  |---|---|---|---|---|
+  | W1 | `truckReleasedTx` 结论白名单失效（有现行单即视为放行） | `TestTC_M6_03_Store_FeedRejectedWithoutConclusion`（1 红） | A4 | `production.go` = `BE86D68C…55D72` |
+  | W2 | `ReturnTruck` 已投料守卫置失效 | `TestReturnTruckRejectsFedBag`（1 红；**M3/M5 退车用例全绿**） | A15 | `receiving_bag.go` = `450F84EC…D613` |
+  | W3 | `CreateFgLot` 日期段改用**生成当日** | `TestTC_M6_07_Store_FgLotCodeSeq1AndDate` + `TestTC_M6_07_HTTP_FgLotCodeSeq1AndDate`（**双层 2 红**） | A8 | `production.go` = `BE86D68C…55D72` |
+  | W4 | `CorrectFeed` 不校验 `reason` | `TestFeedCorrectDeleteAudit` + `TestM6HTTPFeedCorrectDeleteGuards`（2 红） | A13 | `production.go` = `BE86D68C…55D72` |
+
+- **A1–A16 逐条自检（全落）**：A1 ✓ 11/11；A2 `TC-M6-01`（批码段位逐字 + 批序 scope 递增）；A3 `TC-M6-02`（3 行、**本批作用域**计数、袋置「已投料」、重复投 409）；A4/A5 `TC-M6-03/04`（无单 / 有单未出结论 / 不合格 ⇒ 拒且 0 行；**仅 init ⇒ 仍拒**；init+approve 两人 ⇒ 放行且审计留痕）；A6 `TC-M6-05`（A 车拆两批 + B 车并入批 2，批 2 = 2 行、反查谱系如实）；A7 `TC-M6-06`（2 段两班组、段序 1/2、**批仍 1 个**、`output_weight` 为本段产出）；A8 `TC-M6-07`（D 序1 = 来源批序、**日期段 = batch_date**、E 继承全部段位、不一致 400）；A9（N 袋 + `b_label_print`：首打 / 重复打 409 / 补打缺因 409 / 带因 `is_reprint=1`）；A10 `TC-M6-08`（新批 `id≠`、**独立取号非后缀**、日期段 = 当日、`b_rework` 1 行、原批作废 ⇒ 拒）；A11（**9 条 TC 双层**：store `TestTC_M6_01~09` + httpapi `TestTC_M6_01~09`）；A12（`check_perm_registry.py` 绿；6 个 `prod.*` 全在 `mountProd` 逐条写出常量；`prod.rework` = `LevelInit` —— management（READ）发起返工 **403**、production 发起 200）；A13（更正 / 删除**必填 reason**、`correct`/`delete` 审计带 `old_value` 快照、请求体塞 `batch_id`/`bag_id` **不生效**、删后袋回置「在库」可重投）；A14（批序 99 / 成品批序 999 / 成品袋序 999 三条**各自明确报错**，`GET_LOCK` + 同事务取号）；A15（已投料车退车 **`ErrTruckFed`**；删投料后放行作反证）；A16（`information_schema` 断言 `b_production_batch` **无**产出类列，产出只在 `b_fg_lot`）。
+- **D8 纪律**：**未改** `spec/*` / `docs/*`；**未新增 / 删除权限点**（51 × 6 = 306 不变）；`bash scripts/check_all.sh` 全绿；6 个 `prod.*` 仅新增消费端。
+- **§6-24 联动修正已落**：`internal/store/receiving_bag.go#ReturnTruck` 增「该车已有 N 袋投料，不能退车」前置（在质检处置判定之后、整批作废之前），**M3 / M5 既有 TC 保持全绿**（W2 反证见上表）。
+- **★ 未覆盖边界（如实声明）**：**前端未做浏览器点击级验证**（按 `docs/05`，本机不得起监听）—— 已验 `web/src/components/Production.vue`（列表 / 详情 / 谱系三视图）入库、`App.vue` 新「生产」tab、`bash scripts/build.sh` 产物已重嵌 `internal/webui/dist`，且其依赖接口被 **141 条**服务器 TC 打过；**未验**页签切换、权限显隐观感、扫码枪输入回车。⇒ 建议服务器侧开一次浏览器目视（**不影响 A1–A18 判定**）。★ 本批**未开新议题**（实现中未发现规格矛盾）。
 
 ---
 
