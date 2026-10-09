@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -36,6 +37,13 @@ type Config struct {
 	AttachDir               string        // JX_ATTACH_DIR：缺省 /srv/jx-lab-trace/attachments
 	CookieName              string        // 会话 cookie 名（固定，不走环境变量）
 	SecureCookie            bool          // 生产加 Secure（非 dev 模式即视为生产）
+
+	// 留样保留期限默认月数（docs/01 D4；★ 可配置不硬编码，任务包 §6-9）：
+	// JX_RETENTION_MONTHS_RAW / _INTERMEDIATE / _FG / _ARBITRATION，缺省 6 / 3 / 12 / 24。
+	RetentionMonthsRaw          int
+	RetentionMonthsIntermediate int
+	RetentionMonthsFG           int
+	RetentionMonthsArbitration  int
 }
 
 // Load 读取并校验环境变量。任何不合法配置 ⇒ 返回 error（调用方必须拒绝启动）。
@@ -90,7 +98,35 @@ func Load() (Config, error) {
 
 	c.CookieName = defaultCookieName
 	c.SecureCookie = !c.DevMode
+
+	// 留样保留期限默认月数（D4：原料 6 月 / 中间 3 月 / 成品 12 月 / 仲裁 24 月）。
+	var err error
+	if c.RetentionMonthsRaw, err = monthsFromEnv("JX_RETENTION_MONTHS_RAW", 6); err != nil {
+		return c, err
+	}
+	if c.RetentionMonthsIntermediate, err = monthsFromEnv("JX_RETENTION_MONTHS_INTERMEDIATE", 3); err != nil {
+		return c, err
+	}
+	if c.RetentionMonthsFG, err = monthsFromEnv("JX_RETENTION_MONTHS_FG", 12); err != nil {
+		return c, err
+	}
+	if c.RetentionMonthsArbitration, err = monthsFromEnv("JX_RETENTION_MONTHS_ARBITRATION", 24); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// monthsFromEnv 读取「保留月数」环境变量：未设 ⇒ 缺省；非正整数 ⇒ 明确拒绝启动。
+func monthsFromEnv(key string, def int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 || n > 1200 {
+		return 0, fmt.Errorf("%s 取值非法：%q（须为 1~1200 的整数月）", key, v)
+	}
+	return n, nil
 }
 
 var dsnSecretRe = regexp.MustCompile(`(?s)^([^:@/]+):[^@]*@`)
@@ -122,6 +158,9 @@ func (c Config) Describe() []string {
 		"JX_BOOTSTRAP_ADMIN = " + orDash(c.BootstrapSysAdminOpenID),
 		"JX_HTTP_ADDR       = " + c.HTTPAddr,
 		"JX_ATTACH_DIR      = " + c.AttachDir,
+		fmt.Sprintf("retention months   = 原料%d/中间%d/成品%d/仲裁%d",
+			c.RetentionMonthsRaw, c.RetentionMonthsIntermediate,
+			c.RetentionMonthsFG, c.RetentionMonthsArbitration),
 		"auth mode          = " + mode,
 		"cookie             = name=" + c.CookieName + " HttpOnly SameSite=Lax Secure=" + fmt.Sprintf("%v", c.SecureCookie),
 	}

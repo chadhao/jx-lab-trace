@@ -16,6 +16,8 @@ func clearEnv(t *testing.T) {
 		"JX_DB_DSN", "JX_DEV_MODE", "JX_DEV_OPEN_ID", "JX_FEISHU_APP_ID",
 		"JX_FEISHU_APP_SECRET", "JX_SESSION_TTL", "JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID",
 		"JX_HTTP_ADDR", "JX_ATTACH_DIR",
+		"JX_RETENTION_MONTHS_RAW", "JX_RETENTION_MONTHS_INTERMEDIATE",
+		"JX_RETENTION_MONTHS_FG", "JX_RETENTION_MONTHS_ARBITRATION",
 	} {
 		t.Setenv(k, "")
 	}
@@ -136,5 +138,41 @@ func TestConfig_LoadDotEnv_DoesNotOverrideRealEnv(t *testing.T) {
 	// 文件不存在 ⇒ 静默通过（生产不带 .env）
 	if err := LoadDotEnv(filepath.Join(dir, "nope.env")); err != nil {
 		t.Fatalf(".env 缺失不应报错: %v", err)
+	}
+}
+
+// 留样保留期限默认月数可配置（docs/01 D4 / 任务包 §6-9：不得硬编码）。
+func TestConfig_RetentionMonthsConfigurable(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("JX_DB_DSN", "u:p@tcp(127.0.0.1:3306)/db")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("最小配置应可启动: %v", err)
+	}
+	if cfg.RetentionMonthsRaw != 6 || cfg.RetentionMonthsIntermediate != 3 ||
+		cfg.RetentionMonthsFG != 12 || cfg.RetentionMonthsArbitration != 24 {
+		t.Fatalf("保留月数缺省应 6/3/12/24，实际 %d/%d/%d/%d",
+			cfg.RetentionMonthsRaw, cfg.RetentionMonthsIntermediate,
+			cfg.RetentionMonthsFG, cfg.RetentionMonthsArbitration)
+	}
+
+	t.Setenv("JX_RETENTION_MONTHS_RAW", "3")
+	t.Setenv("JX_RETENTION_MONTHS_ARBITRATION", "36")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("配置保留月数后应可启动: %v", err)
+	}
+	if cfg.RetentionMonthsRaw != 3 || cfg.RetentionMonthsArbitration != 36 {
+		t.Fatalf("环境变量未生效: 原料=%d 仲裁=%d", cfg.RetentionMonthsRaw, cfg.RetentionMonthsArbitration)
+	}
+
+	t.Setenv("JX_RETENTION_MONTHS_FG", "banana")
+	if _, err := Load(); err == nil {
+		t.Fatal("非法保留月数必须拒绝启动")
+	}
+	t.Setenv("JX_RETENTION_MONTHS_FG", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("保留月数为 0 必须拒绝启动")
 	}
 }

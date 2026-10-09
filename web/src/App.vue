@@ -4,6 +4,8 @@ import { api } from './api.js'
 import MasterData from './components/MasterData.vue'
 import PermissionAdmin from './components/PermissionAdmin.vue'
 import Receiving from './components/Receiving.vue'
+import Sampling from './components/Sampling.vue'
+import Retention from './components/Retention.vue'
 
 const page = ref('recv')
 const me = ref(null)
@@ -47,6 +49,8 @@ async function logout() {
     <div class="brand">江熙新材 · 实验检测数据追踪</div>
     <nav>
       <button :class="{ on: page === 'recv' }" @click="page = 'recv'">收货</button>
+      <button :class="{ on: page === 'sample' }" @click="page = 'sample'">取样</button>
+      <button :class="{ on: page === 'retain' }" @click="page = 'retain'">留样</button>
       <button :class="{ on: page === 'md' }" @click="page = 'md'">主数据</button>
       <button :class="{ on: page === 'perm' }" @click="page = 'perm'">权限配置</button>
     </nav>
@@ -66,6 +70,8 @@ async function logout() {
 
   <main>
     <Receiving v-if="page === 'recv'" :me="me" />
+    <Sampling v-else-if="page === 'sample'" :me="me" />
+    <Retention v-else-if="page === 'retain'" :me="me" />
     <MasterData v-else-if="page === 'md'" :me="me" />
     <PermissionAdmin v-else :me="me" />
   </main>

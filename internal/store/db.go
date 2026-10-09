@@ -15,6 +15,8 @@ import (
 // Store 是数据访问入口（一个进程一个实例即可）。
 type Store struct {
 	db *sql.DB
+	// retention 是留样保留期限的生效配置（零值 ⇒ 用 D4 安全缺省，见 retention.go）。
+	retention RetentionDefaults
 }
 
 // Open 建立连接池并做一次 PING（连不上 ⇒ 立刻返回错误，不静默降级）。

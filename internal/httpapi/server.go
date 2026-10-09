@@ -106,6 +106,9 @@ func (s *Server) Handler() *echo.Echo {
 	// —— 批 3 · M3 收货与打码（★ 8 个 recv.* 权限点在此消费） ——
 	s.mountReceiving(e)
 
+	// —— 批 4 · M4 取样与留样（★ 5 个 sample.* 权限点在此消费） ——
+	s.mountSampling(e)
+
 	// —— 前端（go:embed 内嵌的构建产物） ——
 	e.GET("/*", s.handleSPA)
 	return e

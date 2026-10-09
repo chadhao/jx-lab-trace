@@ -56,6 +56,11 @@ func main() {
 		fatal("数据库连接失败", err)
 	}
 	defer st.Close()
+	// 留样保留期限默认值走配置（JX_RETENTION_MONTHS_*，docs/01 D4 —— 可配置不硬编码）。
+	st.SetRetentionDefaults(store.RetentionDefaults{
+		RawMonths: cfg.RetentionMonthsRaw, IntermediateMonths: cfg.RetentionMonthsIntermediate,
+		FGMonths: cfg.RetentionMonthsFG, ArbitrationMonths: cfg.RetentionMonthsArbitration,
+	})
 
 	mctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	res, err := st.Migrate(mctx, cfg.BootstrapSysAdminOpenID)

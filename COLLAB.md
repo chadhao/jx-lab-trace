@@ -800,11 +800,85 @@
 - **★ 已交齐的前置（无需 mimo 再问）**：M4 的 5 个权限点（`sample.take` / `sample.retain.in` / `sample.retain.lend` / `sample.retain.destroy.init` / `sample.retain.destroy.approve`）**已在 `spec/permission-points.json` 登记**，且**常量已在 `internal/permission/code.go` 声明、并已在 `internal/permission/all.go` 集中引用**；5 张表（`b_sample_group` / `b_sample` / `b_sample_retention` / `b_sample_lend` / `b_sample_destroy`）**已在 `spec/schema.sql` 建好**；★ 权限引擎**已支持 `INIT` / `APPROVE` 级别**（`internal/permission/engine.go`：`LevelInit` / `LevelApprove`）⇒ 销毁的「发起 ≠ 审批」**可直接由权限点拆分落实**，无需扩展引擎。
 - **★ 我方已先行指出的三处易错点（均已写入任务包 §6）**：① **样品编号的父码取法**（§6-4：前 7 组；**不得**用 27 位裸串或含校验位的完整人读行）；② **不得预生成**（§6-6）；③ **审批入口必须以 `APPROVE` 级别守卫，不得用 `ALL`**（§6-11 —— 因 `engine.Allows` 中 `ALL` 蕴含一切级别，用 `ALL` 会让 `qc` 的 `NONE` 被绕过）。
 - **★ 本轮工具链前置修复（WorkBuddy 域，已随本轮提交）**：`scripts/run_tc_server.sh` 的 `ALL_PKGS` 原为**硬编码 5 包**，批 3 新增 `internal/codec` 后跑「全套」实际只覆盖 **5/6** 个测试包，而输出仍打印「总判定：全绿」（**「部分覆盖」冒充「全部覆盖」**，与 `check_md_tables.py` 文件头所记同族）⇒ 已改为**自动发现** `internal/*/` 下含 `*_test.go` 的包，并加**空包集拒绝执行**（`exit 2`）与 `--list-pkgs` 自证入口；探针 `_probe/probe_discover_pkgs.sh` **五象限 13/13**（真阳性保留 / 假阳性消除 / 显式参数透传 / **旧逻辑复现假绿** / 空集拒绝）。提交 `352e0ef`。
-- **状态**：OPEN
-- **最后更新**：2026-10-09 09:5x
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-09 10:35
 
 **派工命令**（铁律 11：**前台等待**，不得后台起完就返回）：
 `bash scripts/drive_mimo.sh N-011 MIMO-NEXT-BATCH-04.md 5`
+
+**★★ mimo 回执 · 2026-10-09 10:35 · 批 4（M4 取样与留样）D1–D8 全落位；状态改 `MIMO-DONE`**
+
+**① 交付物**
+
+| 项 | 落位（文件） | 要点 |
+|---|---|---|
+| D1 扫码取样（原料） | `internal/store/sampling.go` `TakeSample` | ★★ 走 `codec.Parse`（三种错误口径与批 3 一致）→ 查库定位（不存在 ⇒ `ErrCodeUnknown` 404，与「码非法」分开报）→ 仅对**有效**袋生成（作废 ⇒ `ErrTargetVoided` 409）；每次扫生成 **1 份样 + 1 保留样** 两条 `b_sample` 行；**绝不预生成** —— 只有被扫到的对象才有行 |
+| D2 取样（中间/成品） | 同上 | `T=C` ⇒ 绑 `batch_id`（`bag_id` 空）；`T=D` ⇒ 绑 `fg_lot_id`；`T=A` 等 ⇒ `ErrSampleTargetUnsupported`（400） |
+| D3 取样组（大样） | `CreateSampleGroup` | `group_no` = 大样 `sample_no`（§6-5 同值）；大样 `role='大样'` 且 `group_id` 指本组；成员须**份样、未并入过、与目标同源**（车次组校验袋属于该车）；`sample_count` = 并入份样数 |
+| D4 留样入库 | `internal/store/retention.go` `RetainSample` | 只对**保留样/仲裁样**；三层文本位置必填；★ 期限留空 ⇒ **按类型取默认**（类型判定次序 §6-9：仲裁 → bag→原料 → batch→中间 → fg→成品）；`retention_until` 可显式指定；到期检索 `ListRetention(due_before)` 走 `idx_retention_until` |
+| D5 借还 | `LendSample` / `ReturnLend` | `b_sample_lend` 独立表（非 JSON）；借出 ⇒ **两表同步**「已借出」，归还 ⇒ 回「在库」；未入库不可借、未归还不可再借 |
+| D6 销毁 | `InitDestroy` / `ApproveDestroy` | ★★ **发起 ≠ 审批**：发起只落「待审批」行（`approved_by=''`）+ 审计记发起人，**不改状态**；审批 `approved_by` 空 ⇒ `ErrDestroyNeedApprover`（400）；通过 ⇒ 两表同步「已销毁」+ 审计记审批人；`uk_destroy_sample` 一对象只销毁一次（重复发起/审批 409） |
+| D7 前端 | `web/src/components/{Sampling,Retention}.vue` + `App.vue` 导航 | 取样页（扫码取样 / 建组并入）· 留样页（入库 / 借还 / 销毁两动作按 `perm-summary` 显隐 / 到期检索）；对象下拉只取有效项（服务端已排除作废/已退货）；产物经 `scripts/build.sh` → `//go:embed` |
+| D8 门禁 | `bash scripts/check_all.sh` | **必绿 11/11 全绿 + 2 会报无命中，exit 0**（10:34 实跑）；`check_perm_registry.py` 绿 |
+
+**② 验收判据自查（A1–A15；运行类证据一律在测试服务器 `192.168.10.50` 采集）**
+
+| # | 判据 | 结果 | 证据 |
+|---|---|---|---|
+| A1 | `check_all.sh` 全绿 | ✅ 11/11 | 本机实跑（提交前 10:34 复跑一次） |
+| A2 | 扫袋 2 条样品、编号可推导 | ✅ | `TestTC_M4_01`（store + httpapi）：`sample_no` 与 §6-4 逐字比对（`父码-I01`/`-R01`，父码=人读行前 7 组，用例侧用 `codec.ToHuman` 独立复算） |
+| A3 | 同袋重复扫新组不覆盖 | ✅ | `TestTC_M4_02`：第 2 组 `I02/R02`，第 1 组 2 条仍在，该袋共 4 条 |
+| A4 | ★★ 不预生成（30 袋扫 3 袋） | ✅ | `TestTC_M4_03`：**按本车作用域计数** —— rows=6、有样品袋=3、无记录袋=27、作用域内 `status='未测'` 行=0（未全库 COUNT） |
+| A5 | 3 份样并入大样 | ✅ | `TestTC_M4_04`：`sample_count=3`、成员可查、`group_no==大样 sample_no==父码-C01` |
+| A6 | 期限按类型取默认 + 到期可检索 | ✅ | `TestTC_M4_05`：原料/中间/成品/仲裁 各验一条（6/3/12/24 月）；过期样本（2020-01-01）命中、未到期不命中；可配置见 ④ |
+| A7 | 借出/归还状态 | ✅ | `TestTC_M4_06`：借出后两表均「已借出」、归还回「在库」；未归还再借被拒 |
+| A8 | ★★ 销毁不填审批人 ⇒ 拒绝 | ✅ | `TestTC_M4-07`（store：空/全空白均 `ErrDestroyNeedApprover`；httpapi：management 空审批人 ⇒ **400**）；变异 M1 取证见 ③ |
+| A9 | 中间样绑生产批 | ✅ | `TestTC_M4_08`（store：`batch_id` 非空、`bag_id` 空；httpapi 同） |
+| A10 | 成品样绑成品批 | ✅ | `TestTC_M4_09`（store + httpapi：`fg_lot_id` 非空） |
+| A11 | ★★ 保留样与检测样独立跟踪 | ✅ | **读实现取证**：`b_sample_retention` 的生产写入（INSERT/UPDATE）**只存在于 `internal/store/retention.go`**，且全部由用户显式动作触发（入库/借还/销毁审批）；`b_inspection` 在生产代码里**仅被 M3 退车前置 SELECT**（`receiving_bag.go:556`），无任何 inspection→retention/sample 状态的写路径；M5 未实现 ⇒ **不存在「检测完成清掉保留样」的路径**；「未测占位」由 `TestTC_M4_03` 断言为 0 |
+| A12 | ★★ 发起 ≠ 审批 | ✅ | 路由层：`destroy/init` 守卫 `access.LevelInit`、`destroy/approve` 守卫 `access.LevelApprove`（`httpapi/sample.go`，**非 ALL**）；`TestTC_M4_07_HTTP`：qc 走审批入口 ⇒ **403**、management（APPROVE）⇒ 200；变异 M1 另证 |
+| A13 | 5 个 `sample.*` 点真被消费 | ✅ | `check_perm_registry.py` 绿；**读路由代码**：5 个点全部在 `mountSampling` 路由表内以 `permission.SampleXxx` 常量被 `access.RequirePerm` 消费（非只在 `all.go` 挂名） |
+| A14 | 9 条 TC 均有自动化测试 | ✅ | store：`TestTC_M4_01..09`（9 条齐全）；httpapi 另有 `TestTC_M4_01/07/08/09_HTTP`；测试名均带 TC 编号 |
+| A15 | ★ 服务器真跑全套 TC 全绿 | ✅ | `bash scripts/run_tc_server.sh` ⇒ **★ 包集（6 个）：audit codec config httpapi permission store**；`audit 3 PASS / 0 FAIL / 0 SKIP · codec 6/0/0 · config 7/0/0 · httpapi 43/0/0 · permission 4/0/0 · store 34/0/0` = **97 PASS / 0 FAIL / 0 SKIP**（批 3 基线 81 + 本批 16） |
+
+★ 另两项运行证据（服务器真跑）：`deploy-test-server.sh --restart --smoke` ⇒ 新 PID `2411262`、`/healthz` **200**、仅绑 `127.0.0.1:18080`；对已部署服务冒烟：登录后 `GET /api/sample/perm-summary` 200（未映射账号 5 点全 NONE）· 无权限调 `POST /api/sample/take` ⇒ **403** · `GET /api/sample/retention` ⇒ **403** · 未登录调 `destroy/approve` ⇒ **401** · 前端 bundle `index-Cbu6oHin.js` 含「留样入库/销毁」文案。
+
+**③ 单点变异自证（3 处，均还原后 sha256 与基线逐字一致）**
+
+| # | 变异点 | 判据 | 变红证据（其余保持绿） | 还原核对 |
+|---|---|---|---|---|
+| M1 | `retention.go` `ApproveDestroy` 删去「审批人为空 ⇒ 拒绝」校验 | A8 | 服务器 `run_tc_server.sh store httpapi` ⇒ **恰好 2 条红**：`TestTC_M4_07_DestroyWithoutApproverRejected`（store 33/1 全绿中仅它红）＋ `TestTC_M4_07_HTTP_DestroyInitApproveSplit`（httpapi 42/1） | `retention.go` 还原后 = `BF8848D06BB1596FA29222E8EB81E1A81899B2F85FC07C4A474A1DBC4F233FB9` == 基线 ✅ |
+| M2 | `DefaultRetentionDefaults` 原料默认 6 月 → 3 月 | A6 | 服务器 `run_tc_server.sh store` ⇒ **恰好 1 条红**：`TestTC_M4_05_RetentionDefaultAndDueQuery`（33 PASS） | 同上 `BF8848D0…` == 基线 ✅ |
+| M3 | `sampling.go` `case "C"` 里中间样改绑 `bag_id`（`batch_id` 置空） | A9 | 服务器 `store+httpapi` ⇒ `TestTC_M4_08`（store＋httpapi 各 1）**红**；连带 `TestTC_M4_05` 红 —— 绑错列 ⇒ 类型判成「原料」⇒ 默认月数错（**真实耦合**，如实记录）；其余 store 32 / httpapi 42 PASS | `sampling.go` 还原后 = `F714DFA4B603CA6DF40BD2D66BAF12AE7505C4D8EE48290BA2068221C56D55D6` == 基线 ✅ |
+
+还原后复跑全套：**97 PASS / 0 FAIL / 0 SKIP**（10:33）。
+
+**④ 口径 / 实现决策（COLLAB §2 属我方域，写此备查）**
+
+- **★ 保留期限的配置机制（§6-9 要求可配置、不硬编码）**：**环境变量 `JX_RETENTION_MONTHS_RAW` / `_INTERMEDIATE` / `_FG` / `_ARBITRATION`**，由 `internal/config.Load` 解析（正整数 1~1200，非法即拒绝启动），启动时 `st.SetRetentionDefaults(cfg…)` 注入；未配置 ⇒ 安全缺省即 D4 口径 6/3/12/24。单测：`TestConfig_RetentionMonthsConfigurable`（缺省/覆盖/非法拒绝）＋ `TestM4_RetentionDefaultsConfigurable`（注入生效 + 类型判定次序）。
+- **样品编号并发**：沿用批 3 模式 —— `GET_LOCK`（锁名 `jxlab.sample.<父码>.<角色>`，按「父对象×角色」空间）+ 同事务读最大序号；`LIKE '父码-角色__'` 取存量最大值，超 99 ⇒ `ErrSampleSeqOverflow`（409，`auto_carry_on_overflow=false`）。
+- **销毁的「待审批」形态**：`b_sample_destroy.approved_by` 为 `NOT NULL` 列 ⇒ 发起时以**空串占位**（行存在=已发起，`uk` 挡重复发起），审批时**必须**改为非空；**任何对外可见的完成态都要求 approved_by 非空**，「已销毁」状态只在审批后出现。`pending` 标志由 `approved_by==''` 导出。
+- **建组校验**：成员必须是未并入的份样且与目标同源（车次组验袋属该车 / 生产批组验 `batch_id` / 成品批组验 `fg_lot_id`）——防「把 A 车的份样并进 B 车的大样」。
+- **`GET /api/sample/perm-summary`**（登录即可，**非**新权限点）：返回本账号在 5 个 `sample.*` 点上的生效级别，供前端「发起/审批按权限显隐」（§15 只禁新增权限点，未禁新入口；51 点未动）。
+- **读入口级别**：`sample.take` / `sample.retain.in` 的读走 `LevelRead` 守卫（该点级别集为 ALL/NONE，持 ALL 者通过）；`sample.retain.lend` 读也走 READ（management/sales 为 READ，正好只读）。
+- **依赖**：**零新增**（Go 仍 echo+go-sql-driver+既有 qrcode；前端零新 npm 包）；未引入 cgo。
+- **权限点**：**未新增/未删除**，51×6=306 未动；声明仍在 `internal/permission/code.go`，`all.go` 集中引用未动。
+- **规格/文档**：本批**未改** `spec/*`、`docs/*`；**未发现规格矛盾，故未开新议题**。
+
+**⑤ 边界（如实说，不因通过而隐去）**
+
+- **前端未做浏览器点击级验证**（docs/05 本机不得起监听）：已验 `vite build` 通过、产物 `//go:embed`、部署后 bundle 含 M4 文案、**页面所依赖的每个接口都由服务器 TC 真打过**；**未覆盖**：页签切换、下拉联动等交互观感 —— 建议验收时在服务器侧开一次浏览器目视。
+- **本批未做 E2E 长脚本**（批 3 那种 44 步临时脚本）：M4 接口面已由 97 条 TC（含接口级）在服务器真跑覆盖，部署冒烟另验 6 个点（见 ②）。
+- ★ **工作区发现 16 个 0 字节乱名文件**（名称形如被 `**` 切碎的 `docs/02` 表头行，创建时间 2026-10-09 10:21:13–14，**非本轮任何命令产物**——已核对本轮时间线与全部命令，疑为**并发会话**产物，对应 `N-008` 已立的并发写风险）。处置：**不删除、不暂存**（只走显式路径 add），留待心跳轮处置；`check_all.sh` 不受影响。
+- **夹具纪律自查**：M4 两套夹具均按账号精确匹配、先子后父；TC-M4-03/05 断言全部限定本用例作用域（按本车/本用例样品），未全库计数。
+
+**★★ mimo 收口 · 2026-10-09 10:35 · 状态改 `MIMO-DONE`（任务包 §7 三条完成判据全满足）**
+
+1. **回执 + 状态**：本回执已在册，状态行现为**行首恰为 `- **状态**：MIMO-DONE`**（本段为 `N-011` 段内**局部追加**，未整体重写 `COLLAB.md`，`check_collab.py` / `check_collab_anchors.py` 均绿）；
+2. **提交**：代码以**显式路径**本地提交（**禁 `git add -A`**，**未 push** —— 推送由 WorkBuddy 独立验收通过后执行）；
+3. **门禁 + 服务器 TC**：提交前 `bash scripts/check_all.sh` **必绿 11/11 全绿 + 2 会报无命中，exit 0**；服务器 `run_tc_server.sh` **包集 6 个：97 PASS / 0 FAIL / 0 SKIP**。
+
+★ **请 WorkBuddy 独立复核**（一律不采信本回执）：A1–A15 逐条 + **自己再做至少 2 处单点变异**（本批给了 3 处变异点与还原哈希，可直接复用）。
 
 ---
 
