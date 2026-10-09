@@ -549,16 +549,23 @@ func (s *Store) ReturnTruck(ctx context.Context, truckLotID int64, reason string
 	if err != nil {
 		return TruckLot{}, err
 	}
-	if t.Status == TruckStatusReturned {
+	// ★ 批 5 联动：M5 的 D5 让「处置=退货」即把状态写成「已退货」，但退车登记
+	//	（作废袋码）仍须可执行 —— 故只在「已退货 **且** 袋已全部作废（bag_count=0）」
+	//	时判重复退车；仅状态翻转不拦（否则 API 链路下退车登记永远走不到）。
+	if t.Status == TruckStatusReturned && t.BagCount == 0 {
 		return TruckLot{}, fmt.Errorf("%w：车次 #%d 已退货", ErrAlreadyVoid, truckLotID)
 	}
 
 	// ★ 前置：质检处置 = 退货（M5 的判定在 b_inspection.disposition）
+	// ★★ 联动修正（批 5 §6-9）：只认**现行单** —— 排除已被 b_obj_void 作废的检测单，
+	//	否则「修正后处置已改合格」的车次仍会被已作废单的旧 退货 判定"复活"。
 	var inspID int64
 	err = tx.QueryRowContext(ctx, `
-SELECT id FROM b_inspection
-WHERE target_type = '车次' AND target_id = ? AND disposition = '退货'
-ORDER BY id DESC LIMIT 1`, truckLotID).Scan(&inspID)
+SELECT i.id FROM b_inspection i
+ WHERE i.target_type = '车次' AND i.target_id = ? AND i.disposition = '退货'
+   AND NOT EXISTS (SELECT 1 FROM b_obj_void v
+                    WHERE v.entity = 'b_inspection' AND v.entity_id = i.id)
+ ORDER BY i.id DESC LIMIT 1`, truckLotID).Scan(&inspID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return TruckLot{}, ErrNoReturnDecision
 	}

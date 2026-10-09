@@ -35,6 +35,7 @@ type Config struct {
 	BootstrapSysAdminOpenID string        // JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID：首个系统管理员引导
 	HTTPAddr                string        // JX_HTTP_ADDR：缺省 127.0.0.1:8080
 	AttachDir               string        // JX_ATTACH_DIR：缺省 /srv/jx-lab-trace/attachments
+	AttachMaxMB             int           // JX_ATTACH_MAX_MB：附件单文件上限（MB），缺省 20（任务包 D4）
 	CookieName              string        // 会话 cookie 名（固定，不走环境变量）
 	SecureCookie            bool          // 生产加 Secure（非 dev 模式即视为生产）
 
@@ -96,11 +97,16 @@ func Load() (Config, error) {
 		c.AttachDir = defaultAttachDir
 	}
 
+	// 附件单文件上限（MB）：缺省 20；非法 ⇒ 明确拒绝启动（与 monthsFromEnv 同一手法）。
+	var err error
+	if c.AttachMaxMB, err = mbFromEnv("JX_ATTACH_MAX_MB", 20); err != nil {
+		return c, err
+	}
+
 	c.CookieName = defaultCookieName
 	c.SecureCookie = !c.DevMode
 
 	// 留样保留期限默认月数（D4：原料 6 月 / 中间 3 月 / 成品 12 月 / 仲裁 24 月）。
-	var err error
 	if c.RetentionMonthsRaw, err = monthsFromEnv("JX_RETENTION_MONTHS_RAW", 6); err != nil {
 		return c, err
 	}
@@ -125,6 +131,20 @@ func monthsFromEnv(key string, def int) (int, error) {
 	n, err := strconv.Atoi(v)
 	if err != nil || n <= 0 || n > 1200 {
 		return 0, fmt.Errorf("%s 取值非法：%q（须为 1~1200 的整数月）", key, v)
+	}
+	return n, nil
+}
+
+// mbFromEnv 读取「MB 上限」环境变量（JX_ATTACH_MAX_MB）：未设 ⇒ 缺省；
+// 非正整数或超上限 ⇒ 明确拒绝启动。
+func mbFromEnv(key string, def int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 || n > 10240 {
+		return 0, fmt.Errorf("%s 取值非法：%q（须为 1~10240 的整数 MB）", key, v)
 	}
 	return n, nil
 }
@@ -158,6 +178,7 @@ func (c Config) Describe() []string {
 		"JX_BOOTSTRAP_ADMIN = " + orDash(c.BootstrapSysAdminOpenID),
 		"JX_HTTP_ADDR       = " + c.HTTPAddr,
 		"JX_ATTACH_DIR      = " + c.AttachDir,
+		fmt.Sprintf("attach max MB      = %d", c.AttachMaxMB),
 		fmt.Sprintf("retention months   = 原料%d/中间%d/成品%d/仲裁%d",
 			c.RetentionMonthsRaw, c.RetentionMonthsIntermediate,
 			c.RetentionMonthsFG, c.RetentionMonthsArbitration),

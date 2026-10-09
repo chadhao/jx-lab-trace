@@ -15,7 +15,7 @@ func clearEnv(t *testing.T) {
 	for _, k := range []string{
 		"JX_DB_DSN", "JX_DEV_MODE", "JX_DEV_OPEN_ID", "JX_FEISHU_APP_ID",
 		"JX_FEISHU_APP_SECRET", "JX_SESSION_TTL", "JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID",
-		"JX_HTTP_ADDR", "JX_ATTACH_DIR",
+		"JX_HTTP_ADDR", "JX_ATTACH_DIR", "JX_ATTACH_MAX_MB",
 		"JX_RETENTION_MONTHS_RAW", "JX_RETENTION_MONTHS_INTERMEDIATE",
 		"JX_RETENTION_MONTHS_FG", "JX_RETENTION_MONTHS_ARBITRATION",
 	} {
@@ -174,5 +174,37 @@ func TestConfig_RetentionMonthsConfigurable(t *testing.T) {
 	t.Setenv("JX_RETENTION_MONTHS_FG", "0")
 	if _, err := Load(); err == nil {
 		t.Fatal("保留月数为 0 必须拒绝启动")
+	}
+}
+
+// 附件单文件上限可配置（批 5 D4 / §6-16：不得硬编码；非法即拒绝启动）。
+func TestConfig_AttachMaxMBConfigurable(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("JX_DB_DSN", "u:p@tcp(127.0.0.1:3306)/db")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("最小配置应可启动: %v", err)
+	}
+	if cfg.AttachMaxMB != 20 {
+		t.Fatalf("JX_ATTACH_MAX_MB 缺省应为 20，实际 %d", cfg.AttachMaxMB)
+	}
+
+	t.Setenv("JX_ATTACH_MAX_MB", "50")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("配置附件上限后应可启动: %v", err)
+	}
+	if cfg.AttachMaxMB != 50 {
+		t.Fatalf("环境变量未生效: 实际 %d", cfg.AttachMaxMB)
+	}
+
+	t.Setenv("JX_ATTACH_MAX_MB", "banana")
+	if _, err := Load(); err == nil {
+		t.Fatal("非法附件上限必须拒绝启动")
+	}
+	t.Setenv("JX_ATTACH_MAX_MB", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("附件上限为 0 必须拒绝启动")
 	}
 }
