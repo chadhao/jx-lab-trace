@@ -124,7 +124,13 @@ func m9HChain(t *testing.T, e *env, ck string, cust, inMat, outMat int64) (int64
 		t.Fatalf("记作业段应 200，实际 %d body=%v", resp.StatusCode, body)
 	}
 	_, fgCodes := m8HMakeLot(t, e, ck, batchID, 1)
-	m8HShip(t, e, ck, fgCodes)
+	ship := m8HShip(t, e, ck, fgCodes)
+	// ★ 出场登记（ship_at 非空）—— 客户对账报表只计「已出场」的单（D5 口径）
+	if resp, body := e.do("POST",
+		fmt.Sprintf("/api/ship/shipments/%d/depart", numOf(ship["id"])), ck,
+		`{"plate_no":"湘A·M9001","driver":"报告司机"}`); resp.StatusCode != http.StatusOK {
+		t.Fatalf("出场登记应 200，实际 %d body=%v", resp.StatusCode, body)
+	}
 	return batchID, batch
 }
 

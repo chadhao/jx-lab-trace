@@ -178,22 +178,25 @@ func (s *Store) rptQualityTrend(ctx context.Context, f RptFilters) (RptResult, e
 		periodFmt = `DATE_FORMAT(` + period + `, '%x-W%v')`
 	}
 
-	where := ` WHERE i.conclusion IS NOT NULL` + notVoidInsp
-	var args []interface{}
+	// ★ probe（数据源整体）只带**维度筛选**，不带时间窗（§A15 口径）
+	dimWhere := ` WHERE i.conclusion IS NOT NULL` + notVoidInsp
+	var dimArgs []interface{}
 	if f.CustomerID > 0 {
-		where += ` AND ` + custTargetExpr + ` = ?`
-		args = append(args, f.CustomerID)
+		dimWhere += ` AND ` + custTargetExpr + ` = ?`
+		dimArgs = append(dimArgs, f.CustomerID)
 	}
-	d, dargs := dateClause(period, f.From, f.To)
-	where += d
-	args = append(args, dargs...)
-
-	// probe：数据源整体（维度内）计数 —— 时间窗口不参与
-	probe, err := scanCount(ctx, s.db, `
-SELECT COUNT(*) FROM b_inspection i`+custJoins+where, args...)
+	probe, err := scanCount(ctx, s.db,
+		`SELECT COUNT(*) FROM b_inspection i`+custJoins+dimWhere, dimArgs...)
 	if err != nil {
 		return RptResult{}, fmt.Errorf("统计质量趋势数据源失败: %w", err)
 	}
+
+	where := dimWhere
+	var args []interface{}
+	args = append(args, dimArgs...)
+	d, dargs := dateClause(period, f.From, f.To)
+	where += d
+	args = append(args, dargs...)
 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT `+periodFmt+` AS bucket,
@@ -241,21 +244,25 @@ SELECT `+periodFmt+` AS bucket,
 // ===== 2. customer-recon 客户对账 =====
 
 func (s *Store) rptCustomerRecon(ctx context.Context, f RptFilters) (RptResult, error) {
-	where := ` WHERE s.ship_at IS NOT NULL AND s.status <> '已撤销'`
-	var args []interface{}
+	// ★ probe 只带维度筛选（客户），不带时间窗
+	dimWhere := ` WHERE s.ship_at IS NOT NULL AND s.status <> '已撤销'`
+	var dimArgs []interface{}
 	if f.CustomerID > 0 {
-		where += ` AND s.customer_id = ?`
-		args = append(args, f.CustomerID)
+		dimWhere += ` AND s.customer_id = ?`
+		dimArgs = append(dimArgs, f.CustomerID)
 	}
-	d, dargs := dateClause("s.ship_at", f.From, f.To)
-	where += d
-	args = append(args, dargs...)
-
 	probe, err := scanCount(ctx, s.db,
-		`SELECT COUNT(DISTINCT s.id) FROM b_shipment s`+where, args...)
+		`SELECT COUNT(DISTINCT s.id) FROM b_shipment s`+dimWhere, dimArgs...)
 	if err != nil {
 		return RptResult{}, fmt.Errorf("统计数据源失败: %w", err)
 	}
+
+	where := dimWhere
+	var args []interface{}
+	args = append(args, dimArgs...)
+	d, dargs := dateClause("s.ship_at", f.From, f.To)
+	where += d
+	args = append(args, dargs...)
 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT s.customer_id, COALESCE(c.name, '') AS cname,
@@ -298,21 +305,25 @@ SELECT s.customer_id, COALESCE(c.name, '') AS cname,
 // ===== 3. output-yield 产量与合格率 =====
 
 func (s *Store) rptOutputYield(ctx context.Context, f RptFilters) (RptResult, error) {
-	where := ` WHERE 1 = 1`
-	var args []interface{}
+	// ★ probe 只带维度筛选（客户），不带时间窗
+	dimWhere := ` WHERE 1 = 1`
+	var dimArgs []interface{}
 	if f.CustomerID > 0 {
-		where += ` AND b.customer_id = ?`
-		args = append(args, f.CustomerID)
+		dimWhere += ` AND b.customer_id = ?`
+		dimArgs = append(dimArgs, f.CustomerID)
 	}
-	d, dargs := dateClause("b.batch_date", f.From, f.To)
-	where += d
-	args = append(args, dargs...)
-
 	probe, err := scanCount(ctx, s.db,
-		`SELECT COUNT(*) FROM b_production_batch b`+where, args...)
+		`SELECT COUNT(*) FROM b_production_batch b`+dimWhere, dimArgs...)
 	if err != nil {
 		return RptResult{}, fmt.Errorf("统计数据源失败: %w", err)
 	}
+
+	where := dimWhere
+	var args []interface{}
+	args = append(args, dimArgs...)
+	d, dargs := dateClause("b.batch_date", f.From, f.To)
+	where += d
+	args = append(args, dargs...)
 
 	rows, err := s.db.QueryContext(ctx, `
 SELECT b.id, b.code, b.batch_date,
@@ -432,32 +443,38 @@ SELECT r.id, s.sample_no, s.role, COALESCE(r.location, ''),
 // ===== 5. nonconform-stat 不合格统计 =====
 
 func (s *Store) rptNonconformStat(ctx context.Context, f RptFilters) (RptResult, error) {
-	where := ` WHERE r.judge = '不合格'` + notVoidInsp
-	judgeWhere := ` WHERE r.judge IS NOT NULL AND r.judge <> ''` + notVoidInsp
-	var args []interface{}
-	var jargs []interface{}
+	// ★ probe（不合格结果行整体）只带维度筛选，不带时间窗
+	dimWhere := ` WHERE r.judge = '不合格'` + notVoidInsp
+	var dimArgs []interface{}
 	if f.CustomerID > 0 {
-		where += ` AND ` + custTargetExpr + ` = ?`
-		args = append(args, f.CustomerID)
-		judgeWhere += ` AND ` + custTargetExpr + ` = ?`
-		jargs = append(jargs, f.CustomerID)
+		dimWhere += ` AND ` + custTargetExpr + ` = ?`
+		dimArgs = append(dimArgs, f.CustomerID)
 	}
-	d, dargs := dateClause("COALESCE(i.test_date, DATE(i.created_at))", f.From, f.To)
-	where += d
-	args = append(args, dargs...)
-	d2, dargs2 := dateClause("COALESCE(i.test_date, DATE(i.created_at))", f.From, f.To)
-	judgeWhere += d2
-	jargs = append(jargs, dargs2...)
-
-	// probe：不合格结果行整体（维度内）
 	probe, err := scanCount(ctx, s.db, `
 SELECT COUNT(*) FROM b_inspection_result r
-  JOIN b_inspection i ON i.id = r.inspection_id`+custJoins+where, args...)
+  JOIN b_inspection i ON i.id = r.inspection_id`+custJoins+dimWhere, dimArgs...)
 	if err != nil {
 		return RptResult{}, fmt.Errorf("统计数据源失败: %w", err)
 	}
 
-	// 分母 = 同范围内**已判定**的结果行（占比 = 不合格项次 / 已判定项次）
+	where := dimWhere
+	var args []interface{}
+	args = append(args, dimArgs...)
+	d, dargs := dateClause("COALESCE(i.test_date, DATE(i.created_at))", f.From, f.To)
+	where += d
+	args = append(args, dargs...)
+
+	// 分母 = 同范围内**已判定**的结果行（含时间窗，与 rows 同口径）
+	judgeWhere := ` WHERE r.judge IS NOT NULL AND r.judge <> ''` + notVoidInsp
+	var jargs []interface{}
+	if f.CustomerID > 0 {
+		judgeWhere += ` AND ` + custTargetExpr + ` = ?`
+		jargs = append(jargs, f.CustomerID)
+	}
+	d2, dargs2 := dateClause("COALESCE(i.test_date, DATE(i.created_at))", f.From, f.To)
+	judgeWhere += d2
+	jargs = append(jargs, dargs2...)
+
 	var judged int
 	if probe > 0 {
 		if judged, err = scanCount(ctx, s.db, `
