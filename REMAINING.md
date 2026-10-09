@@ -14,7 +14,7 @@
 | 批 5 | M5 检测 | ✅ **已完成**（议题 `N-012` ⇒ `AGREED`，2026-10-09 12:02 独立验收通过；★ 首次派工被整树回收、续派后交付 `30249d3`；服务器真跑 TC **117 PASS / 0 FAIL / 0 SKIP**（自动发现 6 包）；服务真起 `/healthz` 200 且 `version == HEAD`；WorkBuddy 自做 2 处单点变异） |
 | 批 6 | M6 生产与谱系 | ✅ **已完成**（议题 `N-013` ⇒ `AGREED`，2026-10-09 13:10 独立验收通过；★ 交付 5 次分阶段提交、第 2 次 attempt 跑通；服务器真跑 TC **141 PASS / 0 FAIL / 0 SKIP**（自动发现 6 包）；服务真起 `/healthz` 200 且 `version == HEAD`；WorkBuddy 自做 2 处单点变异） |
 | 批 7 | M7 出货 + M8 追溯 | ✅ **已完成**（议题 `N-014` ⇒ `AGREED`，2026-10-09 19:23 独立验收通过；服务器真跑 TC **170 PASS / 0 FAIL / 0 SKIP**（自动发现 6 包）；服务真起 `/healthz` 200 且 `version == HEAD`；WorkBuddy 自做 2 处单点变异；★ mimo 回执缺位（驱动被整树回收）⇒ 由独立验收补位；★ 收货→取样→检测→生产→出货→追溯 **全链已打通**） |
-| 批 8 | M9 报告分享 + M10 报表 | ★ **已派工**（议题 `N-015`，任务包 `MIMO-NEXT-BATCH-08.md`，2026-10-09 19:2x，依赖批 7；**本期最后一批**）—— 前置已齐：门禁 11/11 绿 · 批 7 = `AGREED` · `docs/04` 含 **M9 的 4 UC / 8 TC ＋ M10 的 2 UC / 4 TC**（共 6 UC / 12 TC，`check_uc_tc.py` 绿，UC 49 / TC 96）· 4 个权限点（`report.generate` / `report.share.manage` / `rpt.view` / `rpt.export`）**已在冻结件登记** · 2 张表（`b_share_report` / `b_share_access`）**已就位**；★ 口径闭合 12 条 ＋ 易错点 20 条；★ **一期以 `cmd/reportd` 承接静态服务（顶替 Caddy —— 无免密 sudo）** |
+| 批 8 | M9 报告分享 + M10 报表 | ✅ **已完成**（议题 `N-015` ⇒ `AGREED`，2026-10-09 21:55 独立验收通过；★ **本批为本期最后一批 ⇒ 一期 8 批（M0~M10 共 11 模块）全部收口**；服务器真跑 TC **203 PASS / 0 FAIL / 0 SKIP**（自动发现 6 包）；**双进程真起**（主服务 `/healthz` 200 且 `version == HEAD`、reportd `/healthz` 200 且未命中链接 404，**均只绑回环**）；WorkBuddy 自做 **2 处单点变异** ＋ **进程级真跑**验证「有效性 = 文件在不在 `served/`」；★ `cmd/reportd` 零 DB **三重取证**：`go list -deps` 零命中 / 进程 `environ` 无 `JX_DB_DSN` / mysql 句柄 0） |
 
 ## 2. 待外部输入（不阻塞开发）
 
