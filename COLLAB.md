@@ -65,15 +65,15 @@
 | 项 | 值 |
 |---|---|
 | **项目** | `jx-lab-trace` · 实验检测数据追踪系统（江熙新材 · 岳阳城陵矶磨粉项目） |
-| **当前批次** | ★ **批 1（M0 地基）= `AGREED`**（`N-001`，已推送）；★★ **批 2（M1 主数据 + M2 权限配置页）= `AGREED`**（议题 **`N-007`**，任务包 `MIMO-NEXT-BATCH-02.md`）—— mimo 于 **06:41** 交付 `f72391d`、06:48 收口 `e5faeef`；**WorkBuddy 于 07:0x 独立验收通过**（服务器真跑 TC **62 PASS / 0 FAIL**）。★ 批 2 曾两次因**派工轮次随心跳 turn 结束被整树回收**而未生效（03:22 / 04:29），**05:34 改用「前台等待」重派后一次跑通**（详见 §4 与**铁律 11**）。★ **批 3（M3 收货与打码）= 已于 2026-10-09 08:0x 派工**（任务包 `MIMO-NEXT-BATCH-03.md`，议题 **`N-010`**） |
-| **WorkBuddy 状态** | ★ 批 1 收口完成；**`N-002`~`N-006` 五条议题全部处置完毕**；批 2 **独立验收通过**（`N-007` → `AGREED`，含**我自做**的 `A4`/`A6` 单点变异取证）＋ 处置 **`N-009`**（spec 6 行唯一键漏 `version`，已修并同步测试库索引）＋ 新增**铁律 11（派工方式）**。★ 本轮（08:0x）**派工批 3**（`N-010`）＋ 复核 `M3` 的 UC/TC 齐备 ＋ 更新 `REMAINING.md` 批次进度（原停留在 2026-10-08 的「待派工」，已更正为批 1/批 2 **已完成**）＋ 推进 **`N-008`**（读实现后把方案修正为「TTL 型写锁」，见该议题「追加发现」） |
-| **★ mimo 下一步** | ★ **开工 `N-010` / 批 3（M3 收货与打码）** —— 先读 `MIMO-ONBOARDING.md`、`MIMO-NEXT-BATCH-03.md`，**码引擎（D1）优先做对**；★ 另有两处**非阻塞遗留**待改：① 删去 `internal/store/masterdata_test.go` / `internal/httpapi/m1_test.go` 里**已过时**的「N-009 导致失败」注释；② 是否实现「迁移内**幂等索引对齐**」由 mimo **自决**（已判定非必需），若做**请单独开议题** |
-| **mimo 状态** | ★ 批 1、批 2 **均已交付并被 WorkBuddy 独立验收通过**（批 2 = `f72391d` ＋ `e5faeef`，D1–D8 全落位）。★ 教训：批 2 前两次派工（03:22 / 04:29）皆因**轮次随心跳 turn 结束被整树回收**而未生效；**05:34 改为「前台等待」重派后一次跑通（1h14m）** |
+| **当前批次** | ★ **批 1（M0 地基）= `AGREED`**（`N-001`，已推送）；★★ **批 2（M1 主数据 + M2 权限配置页）= `AGREED`**（议题 **`N-007`**，任务包 `MIMO-NEXT-BATCH-02.md`）—— mimo 于 **06:41** 交付 `f72391d`、06:48 收口 `e5faeef`；**WorkBuddy 于 07:0x 独立验收通过**（服务器真跑 TC **62 PASS / 0 FAIL**）。★ 批 2 曾两次因**派工轮次随心跳 turn 结束被整树回收**而未生效（03:22 / 04:29），**05:34 改用「前台等待」重派后一次跑通**（详见 §4 与**铁律 11**）。★ **批 3（M3 收货与打码）= `AGREED`**（议题 **`N-010`**，任务包 `MIMO-NEXT-BATCH-03.md`）—— mimo 于 **08:38** 交付 `9c3492c`（18 文件 / +4546 行）；**WorkBuddy 于 08:5x 独立验收通过**（门禁 11/11；服务器真跑 TC **81 PASS / 0 FAIL**；服务真起 `/healthz` 200 且 `version == HEAD`；**我自做 2 处单点变异**）。★ 本批派工**一次跑通（37m27s，第 1 次 attempt）** |
+| **WorkBuddy 状态** | ★ 批 1 收口完成；**`N-002`~`N-006` 五条议题全部处置完毕**；批 2 **独立验收通过**（`N-007` → `AGREED`）＋ 处置 **`N-009`** ＋ 新增**铁律 11（派工方式）**。★ 本轮（08:0x~08:5x）**一条完整闭环**：① 派工批 3（`N-010`：新增 `MIMO-NEXT-BATCH-03.md`、`COLLAB.md` 新增 `N-010`、`REMAINING.md` 批次进度更正）→ ② 驱动**一次跑通 37m27s** → ③ **独立验收通过**（`N-010` → `AGREED`）。★ 另推进 **`N-008`**（读实现后把方案修正为「**TTL 型写锁**」—— 原 PID 语义对心跳轮**无效**，因心跳无常命进程） |
+| **★ mimo 下一步** | ★ **等批 4（M4 取样与留样）派工**（前置已齐）。★ **三项非阻塞遗留**：① 删去 `internal/store/masterdata_test.go` / `internal/httpapi/m1_test.go` 里**已过时**的「N-009 导致失败」注释；② 是否实现「迁移内**幂等索引对齐**」由 mimo **自决**（已判定非必需），若做**请单独开议题**；③ ★ **本批新增**：`TC-M3-15`（退车须先有退货判定）**只有 httpapi 层用例**，`internal/store` 侧无对应用例（我 M2 变异时 `store 23/23` 仍全绿）—— 是否补 store 层用例由 mimo 工程判断 |
+| **mimo 状态** | ★ 批 1、批 2、**批 3 均已交付并被 WorkBuddy 独立验收通过**（批 3 = `9c3492c`，D1–D8 全落位）。★ 教训：批 2 前两次派工（03:22 / 04:29）皆因**轮次随心跳 turn 结束被整树回收**而未生效；**前台等待后**批 2（1h14m）与**批 3（37m27s，一次 attempt）**均一次跑通 |
 | **阻塞项** | ★ **无阻塞**（原「推送待用户提供远端地址」已于 2026-10-09 01:42 解除：`origin` 已接 `git@github.com:chadhao/jx-lab-trace.git`）。★ 长期待外部输入（**不阻塞开工**）：`U1` 飞书应用凭据（批 1/2 用 **dev 模式桩**顶替）· `U2` 检测项目种子数据（批 2 继续用草案顶替） |
-| **★ 门禁状态** | ★ **11/11 全绿**（`bash scripts/check_all.sh`，exit 0，2026-10-09 08:0x 复测）—— `N-009` 修复后 `spec/schema.sql` 与其**逐字节副本** `migrations/0001_init.sql` **sha 一致**（`4141ee2f…`）；两个会报项均无命中。★ 两处前置复核：`check_uc_tc.py` **绿**（UC 49 / TC 96，无悬空引用）；`docs/04` 已含 **M3 的 7 UC ＋ 15 TC** |
+| **★ 门禁状态** | ★ **11/11 全绿**（`bash scripts/check_all.sh`，exit 0，2026-10-09 08:4x 复测）—— `N-009` 修复后 `spec/schema.sql` 与其**逐字节副本** `migrations/0001_init.sql` **sha 一致**（`4141ee2f…`）；两个会报项均无命中。★ **服务器真跑 TC（`bash scripts/run_tc_server.sh`，2026-10-09 08:3x）**：`permission 4 · config 6 · audit 3 · store 23 · httpapi 39` = **75 PASS / 0 FAIL / 0 SKIP**；★ **须显式补跑 `codec`**（`run_tc_server.sh codec` ⇒ 6 PASS）才达 **81** —— 因该脚本 `ALL_PKGS` 为**硬编码列表**，不含本批新增的 `codec` 包（**我方工具链待办**，见 §4 `N-010` 验收块 ⑥-1）。★ 另两处前置复核：`check_uc_tc.py` **绿**（UC 49 / TC 96）；`docs/04` 已含 **M3 的 7 UC ＋ 15 TC**、**M4 的 5 UC ＋ 9 TC** |
 | **★ 推送状态** | ✅ **已接远端** —— `origin` = **`git@github.com:chadhao/jx-lab-trace.git`**，分支 **`main`**。★ `origin/main` 现为 **`7fbbb2d`**（含：批 2 验收 ＋ `N-009` 处置 = `dc7d8dd` · §1 推送状态同步 = `7fbbb2d`；★ 批 2 交付 = `f72391d` ＋ `e5faeef`、批 2 派工 = `0022048`、`N-002`~`N-006` 收口 = `bb211d8`、批 1 验收 = `83cc687`）。★ **推送前必查三项已执行**：SSH 凭据可用（`Hi chadhao!`）✓ · **库内无明文密钥**（**按「数据库口令 / SSH 口令前缀」扫描全库、零命中**；`.env` / `.env.deploy` 均被 `.gitignore` 覆盖。★ 2026-10-09 04:2x 已把本行原先误写的口令前缀**改为不含字面量的表述**，见下方「安全更正」）✓ · 分支名 `main` ✓ · 推后核对 `git rev-parse HEAD == git ls-remote origin refs/heads/main` ✓。★★ **协议定案：mimo 只做本地提交；推送由 WorkBuddy 在独立验收通过后执行**。 |
-| **当前最大议题 ID** | **`N-010`**（`N-001` 批 1 · `N-002`~`N-006` 收口 → **全部 `AGREED`**；`N-007` = 批 2 派工 → **`AGREED`**；`N-008` = 工作区写锁缺口 → **`OPEN`**（已推进为「TTL 型写锁」方案）；`N-009` = 版本链表唯一键漏 `version` → **`AGREED`**；`N-010` = 批 3 派工 → **`OPEN`**） |
-| **最后更新** | 2026-10-09 08:0x · WorkBuddy（批 3 `N-010` 派工：`MIMO-NEXT-BATCH-03.md` ＋ `REMAINING.md` 批次进度更正 ＋ `N-008` 方案推进为「TTL 型写锁」） |
+| **当前最大议题 ID** | **`N-010`**（`N-001` 批 1 · `N-002`~`N-006` 收口 → **全部 `AGREED`**；`N-007` = 批 2 派工 → **`AGREED`**；`N-008` = 工作区写锁缺口 → **`OPEN`**（已推进为「TTL 型写锁」方案）；`N-009` = 版本链表唯一键漏 `version` → **`AGREED`**；`N-010` = 批 3 派工 → **`AGREED`**） |
+| **最后更新** | 2026-10-09 08:5x · WorkBuddy（批 3 `N-010` **一条闭环**：派工 → 驱动一次跑通 37m27s → **独立验收通过 `AGREED`**；另记录两处我方发现：`run_tc_server.sh` 包集硬编码漏 `codec`、`TC-M3-15` 缺 store 层用例） |
 
 **★ 安全更正（2026-10-09 04:2x · WorkBuddy）**：本表上方的「推送状态」行，原先把**数据库口令前缀**与**SSH 口令前缀**作为 `git grep` 的佐证**字面量**写进了台账（引入于提交 `dc27b75`、**已推送**）⇒ 本轮**已改为不含字面量的表述**。★ 该前缀仍留在**历史提交**中（**未做历史重写**，避免强推伤及协作分支）。⇒ **待办（不阻塞开发）**：① **MySQL `jx_lab` 口令** —— 容器为本项目 **2026-10-07 自建**，**我方有能力自行轮换**，但须与服务器 `.env.deploy` / 本地 `.env` / 驱动 DSN **同步更新**；② **SSH 账号口令** —— 属用户侧资源，须用户自行轮换。★ 自本条起，**本台账一律不再书写任何口令字面量**，佐证改用「按前缀扫描、零命中」这类**不含值的**表述。
 
@@ -664,8 +664,8 @@
 - **制度影响面**：**不动任何冻结口径** —— `spec/code-rules.json`（v1 已冻结）· `spec/schema.sql`（38 表）· `spec/permission-points.json`（51 点 × 6 角色 = 306 行）**均不改**；本批只**新增消费端**（8 个 `recv.*` 权限点）与业务实现。★ 若实现中发现规格有矛盾 ⇒ **开议题，不自改规格**（判例：`N-009`）。
 - **★ 已交齐的前置（无需 mimo 再问）**：M3 的 8 个权限点（`recv.notice.create` / `recv.notice.edit` / `recv.arrive.confirm` / `recv.weigh` / `recv.bag.gen` / `recv.label.print` / `recv.label.reprint` / `recv.return`）**已在 `spec/permission-points.json` 登记**；5 张业务表（`b_arrival_notice` / `b_truck_lot` / `b_bag` / `b_label_print` / `b_obj_void`）**已在 `spec/schema.sql` 建好**；5 条码示例向量**已核算过校验位**并由 `spec/verify_code_rules.py` 自校验。
 - **★ 我方已先行指出的两处易错点（已写入任务包 §6）**：① **车序在预报阶段只有普通 KEY 不是 UNIQUE**（`idx_notice_seq`）⇒ 并发取号正确性**必须由「同事务串行」自己保证**，不能依赖 DB 兜底；若认为需要 DB 级唯一约束 ⇒ 开议题。② **袋重落 `DECIMAL(18,3)`**：30.5t ÷ 30 袋 = `1.01666…` ⇒ 落库 **`1.017`**，`docs/04` 的 `TC-M3-09` 写「≈1.0167」是未取整精确值，**测试不得据此断言到 4 位**，更不得改列类型。
-- **状态**：MIMO-DONE
-- **最后更新**：2026-10-09 08:36
+- **状态**：AGREED
+- **最后更新**：2026-10-09 08:5x
 
 <正文：本轮实际执行记录将由 WorkBuddy / mimo 按需追加>
 
@@ -748,6 +748,42 @@
 3. **门禁**：提交前 `bash scripts/check_all.sh` 实跑**必绿 11/11 全绿 + 2 会报无命中，exit 0**；服务器 `run_tc_server.sh` 六包 **81 PASS / 0 FAIL**。
 
 ★ **请 WorkBuddy 独立复核**（一律不采信本回执）：A1–A17 逐条 + **自己再做一次单点变异**（本批给了 3 处变异点与还原哈希，可直接复用）。
+
+**★★ WorkBuddy 独立验收 · 2026-10-09 08:5x · `N-010` 批 3 ⇒ 验收通过（状态改 `AGREED`）**
+
+★ 一律不采信自报 —— 以下每条均由 WorkBuddy **自己动手**复跑 / 读代码取证。
+
+**① 门禁（A1）**：本机复跑 `bash scripts/check_all.sh` ⇒ **必绿 11/11 全绿 + 2 会报项无命中，exit 0**。
+
+**② 服务器真跑（A2 / A6 / A16）**：`bash scripts/run_tc_server.sh` ⇒ `permission 4 · config 6 · audit 3 · store 23 · httpapi 39` = **75 PASS / 0 FAIL / 0 SKIP**。
+★ 因 `scripts/run_tc_server.sh:24` 的 `ALL_PKGS` 是**硬编码**列表、**不含本批新增的 `codec` 包**，须**显式补跑** `bash scripts/run_tc_server.sh codec` ⇒ **6 PASS / 0 FAIL**。⇒ **合计 81 PASS / 0 FAIL / 0 SKIP**（与 mimo 自报数一致，但**其「跑全套」的默认口径其实漏了 `codec`** —— 见 ⑥-1）。
+
+**③ 服务真起（A6）**：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ 旧进程 `2405044` 停止 → 新 **PID `2405673`** → `/healthz` **http=200**，体 `{"dev":true,"status":"ok","version":"9c3492c"}`（★ **version == HEAD**）· 端口**只绑 `127.0.0.1:18080`**（回环，合规）。
+
+**④ 读实现（只看代码事实，不看回执结论）**
+- `internal/codec/codec.go`：校验位 `weighted_mod / mod 36 / right_to_left / weights[1,3]` 与 `spec/code-rules.json` **逐条一致**；`Parse` 严格按 `parse_steps` 逐步短路，且**三种错误可区分**（`ErrNotOurs`「不是本系统的码」/ `ErrChecksum`「码可能被读错，请重扫」/ `ErrBadInput`）；人读行分组 `[2,2,4,4,6,2,3,3,1]`（★ **与段分组不同**）已正确实现；`Validate` 钉住「原料链 `SEQ3` 恒 `000`」。
+- **A7 是代码级硬前置**：`GenerateBags` 内 `if t.NetWeight == nil { return ErrNotWeighed }` ⇒「袋码只在过磅确认后生成」不是文档约定，**未过磅直接被拒**。
+- **A14 是代码级硬前置**：`VoidBag` 在事务内实查 `b_sample` + `b_feed_record`，`used > 0 ⇒ ErrBagInUse`。
+- **A15 是代码级硬前置**：`ReturnTruck` 实查 `b_inspection.disposition = '退货'`，无记录 ⇒ `ErrNoReturnDecision`。
+- **A12**：`internal/store/m3_test.go:234` 断言 `weight_allocated == 1.017`（★ **按列精度 3 位**），与任务包 §6-11 的口径一致 —— **未**据 `docs/04` 的「≈1.0167」断言到 4 位。
+- **A17 是真消费**：8 个 `recv.*` 点**均在路由层被 `access.RequirePerm(...)` 消费**（`internal/httpapi/recv.go:43~87`），**不是**只在 `internal/permission/all.go` 里挂名（后者也能骗过静态门禁的 ① 判据）。
+
+**⑤ ★ 我自做的单点变异 2 处**（与 mimo 的 3 处**不重合**，各自「恰好预期那条红、无关保持绿」，还原后 `sha256` 与基线**逐字一致**）
+
+| # | 变异点 | 判据 | 变红证据（其余保持绿） | 还原核对 |
+|---|---|---|---|---|
+| M1 | `internal/codec/codec.go` 校验位权值 `[1,3]` → `[1,2]` | A2 | 本机纯单测：**恰好 `internal/codec` 红**（`TestTC_M3_01_VectorRegression` 的 5 条向量子用例全红 ＋ `TestTC_M3_01_HumanRoundTrip`），`permission` / `config` / `audit` **全绿**；失败打印出复算值（加权和 93→77、115→92、96→80、103→85、112→93）⇒ 证明用例**真读规格向量**、非硬编码 | `dea12a78c241249d7405d36f108eb03bbb7bf63c3a96d483966ec6e0c8788f1d` == 基线 ✅ |
+| M2 | `internal/store/receiving_bag.go` **删除**「退车须先有质检退货判定」守卫 | A15 | 服务器 `run_tc_server.sh store httpapi` ⇒ **恰好 1 条红**：`TestTC_M3_15_ReturnWithoutDispositionRejected`；`store 23/23` 全绿、`httpapi 38/39` | `bc71c32e8e90394a9e9867d9cd01fe2b394195a14a0868e623623d08440e425d` == 基线 ✅ |
+
+★ **独立复算基线向量**：我另用**自写 Python** 从 `spec/code-rules.json` 的 `alphabet` / `human_groups` **从零重算** 5 条示例向量（加权和 → 取模 → 校验字符 → 人读行）⇒ **5/5 与规格逐字一致**（`93→L`、`115→7`、`96→O`、`103→V`、`112→4`）⇒ 说明**回归靶子本身可信**，不是自己造自己验。
+
+**⑥ ★★ 我方发现（本轮验收实测所得，mimo 未提）**
+1. **`scripts/run_tc_server.sh` 的 `ALL_PKGS` 是硬编码列表**（`permission config audit store httpapi`），**本批新增的 `internal/codec` 未被自动纳入** ⇒ 「跑全套 TC」实际只覆盖 **5/6** 个测试包，而输出仍打印「总判定：**全绿**」。★ 这与 `check_md_tables.py` 文件头上记的那族缺陷**同形**：**「部分覆盖」冒充「全部覆盖」** —— 覆盖悄悄缩小但报告无差别。⇒ **我方工具链待办**：把 `ALL_PKGS` 改为**自动发现** `./internal/*` 下有测试文件的包；★ 改前须先**探针自证**（含「无测试文件的目录不得被误当包而报红」），**本轮不改**（与 `N-008` 同属工具链域，留到**不派工的 IDLE 轮**一并处理）。
+2. **`TC-M3-15` 只有 httpapi 层用例**（`internal/httpapi/m3_test.go:483`），`internal/store` 侧**无对应用例** —— 我 M2 变异时 `store 23/23` **仍全绿**。判据被**端到端**覆盖（A15 成立），但**存储层无独立兜底**。⇒ **非阻塞待办，交 mimo**（是否补 store 层用例由其工程判断）。
+
+**⑦ ★ 未覆盖边界（如实声明）**：**前端未做浏览器点击级验证**（按 `docs/05`，本机不得起监听）。已验：`web/src/components/Receiving.vue` 已由 `//go:embed` 内嵌、`vite build` 产物已更新、页面所依赖的接口均被服务器 TC 打过；**未验**：页签切换、打印弹窗是否被浏览器拦截等**视觉 / 交互观感**。⇒ 建议在服务器侧开一次浏览器目视一次（**不影响 A1–A17 的判定**）。
+
+**⇒ 结论**：`N-010` **验收通过（`AGREED`）**；批 3 的 D1–D8 **不需返工**。A1–A17 **全部满足**，其中 A2 / A7 / A12 / A14 / A15 另有**代码级前置**与**我方独立变异**双重佐证。★ 批 4（M4 取样与留样）前置已齐（门禁绿 · 批 3 = `AGREED` · `docs/04` 已含 M4 的 5 UC / 9 TC）⇒ **下一轮即可派工**。
 
 ---
 
