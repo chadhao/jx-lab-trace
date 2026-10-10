@@ -112,9 +112,12 @@ func SessionMiddleware(st *store.Store, o Opts) echo.MiddlewareFunc {
 
 			// 滑动续期：数据库 expires_at 与 cookie Max-Age 在同一次请求内一起推。
 			newExp := now.Add(o.TTL)
-			ok, err := st.TouchSession(ctx, sid, now, newExp)
+			// ★★ 只把「会话确实无效」当未登录；**续期受阻（并发/锁）不得改变有效性判定**
+			//   （2026-10-10 实测：并发请求里撞上写竞争的那个被误判未登录 ⇒ 随机 401）。
+			//   且只在「剩余有效期不足一半」时才真续期 ⇒ 首屏并发几乎不写库、不竞争。
+			renewBefore := now.Add(o.TTL / 2)
+			ok, err := st.TouchSession(ctx, sid, now, newExp, renewBefore)
 			if err != nil || !ok {
-				// 续期失败（并发登出/刚好过期）⇒ 按无效会话处理，不静默放行
 				ClearSessionCookie(c, o)
 				return next(c)
 			}

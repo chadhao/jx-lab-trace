@@ -143,7 +143,7 @@ func TestTC_M0_Session_StoreAndRevoke(t *testing.T) {
 
 	// 滑动续期
 	newExp := time.Now().Add(2 * time.Hour)
-	ok, err := st.TouchSession(ctx, sid, time.Now(), newExp)
+	ok, err := st.TouchSession(ctx, sid, time.Now(), newExp, time.Now().Add(time.Hour))
 	if err != nil || !ok {
 		t.Fatalf("续期失败: ok=%v err=%v", ok, err)
 	}
@@ -160,7 +160,7 @@ func TestTC_M0_Session_StoreAndRevoke(t *testing.T) {
 	if sess.Valid(time.Now()) {
 		t.Fatal("已登出的会话必须无效")
 	}
-	ok, err = st.TouchSession(ctx, sid, time.Now(), time.Now().Add(time.Hour))
+	ok, err = st.TouchSession(ctx, sid, time.Now(), time.Now().Add(time.Hour), time.Now().Add(30*time.Minute))
 	if err != nil {
 		t.Fatalf("续期调用失败: %v", err)
 	}
