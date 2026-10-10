@@ -55,7 +55,7 @@ async function logout() {
 <template>
   <header class="topbar">
     <div class="brand">江熙新材 · 实验检测数据追踪</div>
-    <nav>
+    <nav v-if="me">
       <button :class="{ on: page === 'recv' }" @click="page = 'recv'">收货</button>
       <button :class="{ on: page === 'sample' }" @click="page = 'sample'">取样</button>
       <button :class="{ on: page === 'retain' }" @click="page = 'retain'">留样</button>
@@ -80,21 +80,38 @@ async function logout() {
     </div>
   </header>
 
-  <p v-if="err" class="err">{{ err }}</p>
+  <!-- ★★ 未登录 ⇒ **只渲染登录引导，绝不渲染业务页**。
+       动因（2026-10-10 实测）：原实现 `/api/me` 401 时**照样渲染业务页**，
+       各子组件各自去拉数据、各自报「未登录或会话已失效」，用户看到一屏报错却不知怎么办。
+       ⇒ ★ 判据：**鉴权失败的页面必须"引导去登录"，不能"装作已登录"**。 -->
+  <section v-if="!me" class="login-card">
+    <h2>请先登录</h2>
+    <p v-if="err" class="err">{{ err }}</p>
+    <p class="hint">身份由飞书提供（open_id 为身份主键，**未在系统内映射角色的账号会被拒绝**）。</p>
+    <div class="login-actions">
+      <a class="btn-primary" href="/api/auth/feishu/start">用飞书登录</a>
+      <button class="ghost" @click="devLogin">开发模式免登</button>
+    </div>
+    <p class="hint">★ 从飞书工作台点开本应用时，会自动走免登，通常看不到本页。</p>
+  </section>
 
-  <main>
-    <Receiving v-if="page === 'recv'" :me="me" />
-    <Sampling v-else-if="page === 'sample'" :me="me" />
-    <Retention v-else-if="page === 'retain'" :me="me" />
-    <InspDetail v-else-if="page === 'insp' && inspId" :me="me" :inspection-id="inspId"
-      @open="(id) => (inspId = id)" @back="inspId = null" />
-    <InspTasks v-else-if="page === 'insp'" :me="me" @open="(id) => (inspId = id)" />
-    <MasterData v-else-if="page === 'md'" :me="me" />
-    <Production v-else-if="page === 'prod'" :me="me" />
-    <Shipment v-else-if="page === 'ship'" :me="me" />
-    <Trace v-else-if="page === 'trace'" :me="me" />
-    <Report v-else-if="page === 'report'" :me="me" />
-    <Rpt v-else-if="page === 'rpt'" :me="me" />
-    <PermissionAdmin v-else :me="me" />
-  </main>
+  <template v-else>
+    <p v-if="err" class="err">{{ err }}</p>
+
+    <main>
+      <Receiving v-if="page === 'recv'" :me="me" />
+      <Sampling v-else-if="page === 'sample'" :me="me" />
+      <Retention v-else-if="page === 'retain'" :me="me" />
+      <InspDetail v-else-if="page === 'insp' && inspId" :me="me" :inspection-id="inspId"
+        @open="(id) => (inspId = id)" @back="inspId = null" />
+      <InspTasks v-else-if="page === 'insp'" :me="me" @open="(id) => (inspId = id)" />
+      <MasterData v-else-if="page === 'md'" :me="me" />
+      <Production v-else-if="page === 'prod'" :me="me" />
+      <Shipment v-else-if="page === 'ship'" :me="me" />
+      <Trace v-else-if="page === 'trace'" :me="me" />
+      <Report v-else-if="page === 'report'" :me="me" />
+      <Rpt v-else-if="page === 'rpt'" :me="me" />
+      <PermissionAdmin v-else :me="me" />
+    </main>
+  </template>
 </template>

@@ -237,3 +237,12 @@ td.grey {
   font-style: normal;
   font-size: 0.85rem;
 }
+
+/* ★ 未登录引导卡（2026-10-10）：鉴权失败时只显示登录入口，不渲染业务页。 */
+.login-card { max-width: 40rem; margin: 4rem auto; padding: 2rem; border: 1px solid #e3e6eb;
+  border-radius: 10px; background: #fff; text-align: center; }
+.login-card h2 { margin: 0 0 1rem; }
+.login-actions { display: flex; gap: .75rem; justify-content: center; margin: 1.25rem 0; }
+a.btn-primary { display: inline-block; padding: .55rem 1.4rem; border-radius: 6px;
+  background: #1a73e8; color: #fff; text-decoration: none; font-weight: 600; }
+a.btn-primary:hover { background: #1765cc; }
