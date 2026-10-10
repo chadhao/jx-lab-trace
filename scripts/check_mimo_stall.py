@@ -7,10 +7,18 @@ check_mimo_stall.py —— 判断 mimo 轮次是「在跑」还是「卡住了�
   它的特征不是"进程没了"，而是 **进程活着、但日志早已停止增长、也没有任何外连**。
   ⇒ ★ 判据：**「进程存活」不等于「在推进」；要看「客观产物有没有增长」。**
 
-判据（三项合起来才判停滞，避免误杀）：
+判据（**四项合起来才判停滞**，避免误杀）：
   ① 日志 **mtime 距今 > --max-idle**（默认 900 秒 = 15 分钟）
   ② 给定 --pid 时，该进程**仍然存活**（进程已退出 ⇒ 那是"结束"，不是"卡住"）
-  ③ ★ 只判停滞，**不自动杀** —— 处置交给调用方（本脚本只负责"看得见"）
+  ③ ★★ **CPU 时间在采样窗口内【没有】增长**（2026-10-10 加，见下）
+  ④ ★ 只判停滞，**不自动杀** —— 处置交给调用方（本脚本只负责"看得见"）
+
+★★ 为什么加 ③（**实测事故驱动**）：2026-10-10 派工 `N-016`，mimo **连续 3 次 attempt 都在
+   ~15 分钟处被判"停滞"并被终止**，而日志显示它当时**正在正常干活**（改完 CSS、静态判据三项全过、
+   接着加载 playwright 做**浏览器级深色偏好验收**）。⇒ **"不写日志" ≠ "没在干活"** ——
+   长任务（浏览器验收 / 长推理 / 等外部 IO）本来就可能十几分钟不产日志。
+   ⇒ ★★ **判据不是越严越好，而是越准越好：误伤合法用法 ⇒ 对方理性的应对是绕过它 ⇒ 等于判据不存在。**
+   ⇒ 补一条**客观证据**：**进程 CPU 时间在采样窗口内增长 ⇒ 它在干活 ⇒ 不判停滞。**
 
 用法：
   python scripts/check_mimo_stall.py                       # 用默认日志与阈值
@@ -20,6 +28,7 @@ check_mimo_stall.py —— 判断 mimo 轮次是「在跑」还是「卡住了�
 """
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -65,11 +74,40 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
+def cpu_seconds(pid: int):
+    """进程累计 CPU 时间（秒）；取不到 ⇒ None。跨平台。
+
+    ★ 为什么用它：**"不写日志" ≠ "没在干活"** —— 长任务（浏览器验收/长推理/等 IO）
+      本就会长时间不产日志。CPU 时间在增长是最直接的"它在推进"证据。
+    ★ 编码同 pid_alive：中文 Windows 的 tasklist 输出是 GBK。
+    """
+    try:
+        if os.name == "nt" or sys.platform.startswith("win"):
+            raw = subprocess.run(["tasklist", "/v", "/FI", "PID eq %d" % pid],
+                                 capture_output=True, timeout=20).stdout
+            txt = raw.decode("utf-8", errors="ignore")
+            if not re.search(r"\d+:\d{2}:\d{2}", txt):
+                txt = raw.decode("gbk", errors="ignore")
+        else:
+            raw = subprocess.run(["ps", "-p", str(pid), "-o", "cputime="],
+                                 capture_output=True, timeout=10).stdout
+            txt = raw.decode("utf-8", errors="ignore")
+        m = re.search(r"(?:(\d+)-)?(\d+):(\d{2}):(\d{2})", txt)
+        if not m:
+            return None
+        d, h, mi, se = (int(x) if x else 0 for x in m.groups())
+        return d * 86400 + h * 3600 + mi * 60 + se
+    except Exception:
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--log", default=DEFAULT_LOG)
     ap.add_argument("--max-idle", type=int, default=900, help="日志静止多少秒判停滞")
     ap.add_argument("--pid", type=int, default=0, help="mimo 进程号（给了就一并核存活）")
+    ap.add_argument("--cpu-sample-sec", type=int, default=5,
+                    help="CPU 采样窗口秒数（窗口内 CPU 有增长 ⇒ 判为在干活，不判停滞）")
     a = ap.parse_args()
     a.log = normalize(a.log)
 
@@ -98,6 +136,21 @@ def main() -> int:
     if a.pid and alive is False:
         print("○ 判定：**轮次已结束**（进程已退出，日志静止属正常终态）—— 非停滞")
         return 0
+
+    # ★★ 免死条件（2026-10-10 加）：日志静止但 **CPU 在涨** ⇒ 它在干活，不判停滞。
+    if a.pid and alive:
+        c1 = cpu_seconds(a.pid)
+        if c1 is not None:
+            time.sleep(max(1, a.cpu_sample_sec))
+            c2 = cpu_seconds(a.pid)
+            if c2 is not None and c2 > c1:
+                print("OK 活跃（日志静止 %d 秒，但 **CPU 时间在增长**：%ds → %ds ⇒ 在干活，非停滞）"
+                      % (idle, c1, c2))
+                return 0
+            print("CPU 时间：%s → %s（窗口 %ds 内无增长）"
+                  % (c1, c2, a.cpu_sample_sec))
+        else:
+            print("CPU 时间：取不到（跳过该免死判据）")
 
     print("")
     print("● 判定：**停滞** —— 日志已静止 %d 秒%s" %
