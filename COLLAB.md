@@ -1422,8 +1422,69 @@
   ⇒ ★★ **判据补充：只把 `color-scheme` 改成 `light` 不够** —— **原生控件的弹出层必须显式着色并可读**；`body` 与 `select`/`option` 都要有显式 `background`/`color`。
   ⇒ ★ 验收新增必过点：**系统深色偏好下，展开下拉菜单能看清文字**。
 - ★ **续派记录**：第 1 次 attempt 在改 `web/src/style.css` 时**会话被回收**（起进程方式未用后台任务）；★ 已完成 `color-scheme: light dark` → **`light`**（**未提交、保留在工作区**，续派不重做）；`body` 显式底色等**待做**。★ 任务包已加 `§0 续派说明`。
-- **状态**：OPEN
-- **最后更新**：2026-10-10 20:46
+**★★ mimo 回执 · 2026-10-10 23:41 · `MIMO-NEXT-FIX-01` 交付完毕（D1 `N-016` 浅色主题 ＋ D2 `N-017` 复核代改 6 处）；状态改 `MIMO-DONE`**
+
+★ 本段为 `N-016` 段内**局部追加**，未整体重写 `COLLAB.md`（`check_collab.py` / `check_collab_anchors.py` / `check_md_tables.py` 均绿）。
+
+**1. D1 `N-016` 落位**（提交 `7c6bb10`，**显式路径、只本地提交、未 push**）
+
+- `web/src/style.css`：`:root` 的 `color-scheme: light dark` → **`light`**；**显式** `body { background:#fff; color:#1f2328 }`；`input,select` 显式白底深字；★ **新增 `option`（含 `select option`）`background:#fff; color:#1f2328`** —— 即用户报的「下拉白底白字」；`button:disabled` opacity `0.45` → `0.6`（浅色下 0.45 过淡）。
+- `web/index.html`：加 `<meta name="color-scheme" content="light">`（**双保险，不作为唯一手段**）。
+- ★ **11 个页面逐个扫过**（收货/取样/留样/检测/生产/出货/追溯/报告/报表/主数据/权限配置 = `web/src/components/` 全 12 个 `.vue` ＋ `style.css`）：**零处深色硬编码背景** —— 全库仅两处 `#` 三位色且都是**前景/品牌色**（`#1a7f37` 绿、`#1a73e8` 蓝），无 `inline style background`、无 `linear-gradient`、无 `prefers-color-scheme` 分支、无 `background: rgba(0,0,0,…)`。
+- ★ **D4 内嵌铁律**：`internal/webui/dist` **已重建** —— 新产物 `index-oR8lcKZx.js` / `index-lylk986w.css`，旧产物 `index-BXAaiUle.js` / `index-B4hEiea7.css` **已删并入库**。
+- 对比度抽查（浅底上）：正文 `#1f2328`/`#fff`；表头 `th` = `rgba(127,127,127,0.12)` 浅灰；`.hint` `#6e7781`（≈4.6:1，过 AA 正文线）；`td.empty` 同色；禁用按钮 opacity `0.6`；`select` 选中态由 `color-scheme: light` 走系统浅色高亮。
+
+**2. D2 `N-017` 逐条复核**（6 条全读实现；★ 认可 4 条原样、**3 条我按复核结论又动了实现**）
+
+| # | 复核结论 |
+|---|---|
+| ① `store.TouchSession` 语义 | **认可**（返回值 = 会话是否**有效**，≠ 是否续期；仅 `expires_at < renewBefore` 才写库）。★ **我补的**：`LoadSession` 失败要分两种 —— `ErrNoSession` ⇒ 无效（`ok=false, err=nil`）；**库错误 ⇒ `err≠nil` 如实上报**。原实现 `lerr != nil` 一律当「会话无效」⇒ **DB 抖动被吞成 401**。 |
+| ② `access.SessionMiddleware` | **认可**（`renewBefore = now + TTL/2`，首屏并发落在窗口外就**不写库**）。★ **我补的**：库错误 ⇒ **500 且不清 cookie**（原实现顺手 `ClearSessionCookie` ⇒ DB 抖动把用户**踢下线**）；`ErrNoSession` ⇒ 清 cookie 按未登录放行。 |
+| ③ `store_test.go` 补第 5 参 | 签名变更的连带，认可，未改。 |
+| ④ `handleSPA` 缓存头 | **认可**（哈希产物 `immutable`、入口与兜底 `no-cache`）。★ **复核时另发现同函数真 bug**：SPA 兜底走 `mimeOf(path)`，无扩展名深链给 `application/octet-stream` ⇒ **浏览器把深链当文件下载**；已改为按 `text/html; charset=utf-8` 吐出。 |
+| ⑤ `App.vue` 401 只渲染登录卡 ＋ `:key` 绑身份 | **认可**。★ **我补的**：`ready` 门闩 —— 首屏 `/api/me` 未返回前**不渲染**登录卡，否则每次刷新都闪一下「请先登录」；顺手去掉提示文案里误写的 `**…**` 字面星号。 |
+| ⑥ `Receiving/Production.vue` 成功即清错误 | **认可**，未改动。 |
+
+- ★★ **安全性复核（重点 #1）**：**未放松** —— 撤销 ⇒ `ok=false`；过期 ⇒ `ok=false`；不存在 ⇒ `ok=false`；**库错误 ⇒ `err≠nil`**（四态各有一条断言钉住）。
+- ★★ **续期及时性**：`renewBefore = now + TTL/2` ⇒ 剩余不足一半即真写，`expires_at` 被推到 `expiresAt`；用例断言并发后 `expires_at > now+1h`（**不会等到快过期**），且窗口外 `expires_at` 保持初值 ±1s（**不写库**）。
+- ★ **更优实现？本轮决定不引入** `SetMaxOpenConns` 调优 / busy 重试：根因是「滑动续期=每请求都可能写库」，**能不写就不写**（写条件收窄）已把竞争消掉；加连接池只是把竞争推迟、且不解决「没续成 ≠ 会话无效」这个语义混淆（§8 两条）。
+- ★ **我改了一条既有断言并声明理由**：`internal/httpapi/m6_test.go` `TC-M6_06` 原断言「**全局**批列表恰好 1 条」，但该列表是全局的（权限显隐 + `LIMIT 500`），且测试库与 e2e/现场共用（残留 `created_by=ou_dj_e2e` 2 条）⇒ 改为**只数本用例创建的批**（`created_by == m6HTTPOpenID`）。**用例意图未放松**（跨班组两段作业不得裂出第二个批），服务器 TC 该用例 PASS。
+
+**3. 新增 3 个回归测试**（随 `7c6bb10` 入库）
+
+- `internal/store/session_concurrency_test.go`：并发 16×`TouchSession` ⇒ **恒 `ok=true, err=nil`**；＋撤销/过期/不存在/**库错误（关连接池）**四态；＋续期及时性。
+- `internal/httpapi/session_concurrency_test.go`：并发 16×`/api/me` ⇒ **全 200（无随机 401）**；续期及时；**撤销后 401**（安全不放松）。
+- `internal/httpapi/spa_cache_test.go`：入口/兜底 `no-cache`、哈希产物 `immutable`、兜底 `Content-Type` 必须 `text/html`（**纯单测，不依赖 DB**，可在本机跑）。
+
+**4. D3 门禁**：`bash scripts/check_all.sh` ⇒ **必绿 11/11 全绿 ＋ 2 会报项无命中，exit 0**。
+
+**5. 测试服务器实测**（`192.168.10.50`，按 §6-1）
+
+- `bash scripts/deploy-test-server.sh --restart --smoke` ⇒ 旧 PID `50396` 停 ⇒ 新 **PID `51474`**（`127.0.0.1:18080`）／reportd 新 PID `51488`；`/healthz` **200**，`/api/me` 未登录 401。
+- ★★ **服务端静态断言 5/5 全过**（任务包 §0-c 已删「浏览器级验收」，改由这五条充当判据）：
+  1. 入口 `<meta name="color-scheme" content="light">`；
+  2. CSS `color-scheme:light`，**不含 `dark`**；
+  3. `body{margin:0;background:#fff;color:#1f2328}`；
+  4. `select{…background:#fff;color:#1f2328}` ＋ `option{background:#fff;color:#1f2328}`（＝用户报的下拉白底白字）；
+  5. 旧产物已下线：`assets/index-B4hEiea7.css` 返回 `text/html`（SPA 兜底，非 `text/css`），入口引用 `index-oR8lcKZx.js`。
+- ★ **判据脚本自身先被打过**（§6-5）：
+  - **负向对照** `_probe/negative_control.sh`：拿**改动前的内嵌产物**跑同一套判据 ⇒ ①②③④ **全部判红**，新产物 **全部判绿** ⇒ 「旧红新绿」，**判据不是恒真**。
+  - **自曝两次假象**：① 我最初的 `case` 模式里 `content="light"` 的引号被 shell 吃掉 ⇒ **假 FAIL**，改用 `grep -qi`；② **PowerShell 管道传 UTF-8 脚本到 `ssh bash -s` 会被破坏**（报 `unexpected EOF while looking for matching "` 且把 `else`/`echo` 当文本吐出）⇒ 改为 **`scp` 上服务器再执行**。
+- `bash scripts/run_tc_server.sh` ⇒ 7 包 **211 PASS / 0 FAIL / 0 SKIP**（`access 5 · audit 3 · codec 6 · config 8 · httpapi 97 · permission 4 · store 88`）。★ **`SKIP=0` ⇒ 新增的 DB 集成用例是真跑过的，不是静默跳过**。
+
+**6. D5 回执 / D6 提交**
+
+- 本回执写在 `N-016` 段内，状态行现为行首 **`- **状态**：MIMO-DONE`**；`N-017` 段同步收口。
+- 提交 `7c6bb10`：**显式路径**（**禁 `git add -A`**）、**只本地提交、未 push**（推送由 WorkBuddy 独立验收后执行）。★ 验收残留 `.playwright-cli/` **已删除、未入库**；探针产物在 `_probe/`（已在 `.gitignore`）。
+
+★ **如实声明的未做项**
+
+1. ★ **「系统深色偏好下的真机浏览器验收」未做** —— 任务包 §0-c 已删除该项（本机外层是 PowerShell、且本机无法可靠模拟系统深色偏好，硬做只会假绿）。★ 判据已由上面 **5/5 静态断言 ＋ 负向对照**替代。**如需真机复核**：把系统切到深色 → 打开权限配置页「从某角色复制权限」→ 展开下拉，**弹出列表应为白底深字可读**。
+2. **`internal/access` 没有 `session.go` 的直接中间件用例**（该包现只有 `feishu_test.go` 5 条）：「库错误 ⇒ 500 / 不存在 ⇒ 清 cookie」目前由 `store` 层用例 ＋ 端到端 `/api/me` 用例**间接**覆盖，**未单测中间件本身**。
+3. **11 页只做了静态扫描 ＋ 样式通读**，未逐页肉眼过观感（同上一条：本机不作浏览器验收）。
+
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-10 23:41
 
 ### N-017 · 复核 WorkBuddy 在联调期「代改」的 6 处（用户要求此后开发归 mimo）
 
@@ -1434,8 +1495,9 @@
 - **我方立场**：★ **代改不等于定案** —— 这 6 处属实现域，**应由 mimo 复核后接管**。★ 尤其 ① 的语义变更影响面最大（并发随机 401 已复现并修复，实测三/八/十六并发由"必中一个 401"变为**全 200**），但**不得以"能跑"替代对其安全性的复核**（会话确实无效时仍须拒绝；续期是否仍及时）。
 - **建议方案**：逐条读实现复核对错，不认可的**直接改**；给 ① 补**并发回归用例**（并发 N 次 ⇒ 全 `ok=true`；撤销/过期 ⇒ `ok=false`）；若有更优实现（连接池/重试策略）由 mimo 自决并说明理由。
 - **制度影响面**：只涉及实现与测试；★ 不动 `spec/` 冻结口径。
-- **状态**：OPEN
-- **最后更新**：2026-10-10 20:42
+- ★ **mimo 复核结论（2026-10-10 23:41，提交 `7c6bb10`）**：6 条**全读实现**逐条过 —— ①②③④⑤⑥ **均认可**，但**认可不等于原样不动**：① 我把「**库错误**」与「**会话不存在**」从 `TouchSession` 里**分流**出来（不存在 ⇒ 无效；库错误 ⇒ `err≠nil` 如实上报，不再被吞成 401）；② 中间件同步改为**库错误 ⇒ 500 且不清 cookie**（原实现会把 DB 抖动变成「踢下线」）；④ 复核中**另发现同函数 bug**（SPA 兜底无扩展名路径给 `application/octet-stream` ⇒ 深链被当下载）已改按 `text/html`；⑤ 补 `ready` 门闩避免首屏闪现登录卡；③⑥ 未动。★ **安全性未放松**（撤销/过期/不存在/库错误四态各有一条断言），**续期仍及时**（`renewBefore = now + TTL/2`）。★ 并发回归 3 个测试入库，服务器 TC **211 PASS / 0 FAIL / 0 SKIP**。★ **决定不引入**连接池调优/重试（能不写就不写已消掉竞争，见回执表下方理由）。详见 `N-016` 段内回执表。
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-10 23:41
 
 ## 5. 已决议
 
