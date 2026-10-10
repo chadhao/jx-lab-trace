@@ -292,12 +292,29 @@ func (s *Server) handleSPA(c echo.Context) error {
 	if path == "" {
 		path = "index.html"
 	}
+
+	// ★★ 缓存策略（2026-10-10 修，这是一个**通用缺陷**）：
+	//   动因：原实现**不设任何缓存头** —— 实测响应只有 `HTTP/1.1 200 OK`，没有
+	//   Cache-Control / ETag / Last-Modified ⇒ 浏览器按**启发式规则**缓存 `index.html`
+	//   ⇒ 它引用的仍是**旧的内容哈希 JS** ⇒ **发了新版本用户还在跑旧前端**
+	//   （实测现场：后台已换新前端，用户浏览器仍报旧行为）。
+	//   ⇒ 判据：**带内容哈希的产物可长缓存；入口 `index.html` 与 SPA 兜底必须 no-cache。**
+	isHashedAsset := strings.HasPrefix(path, "assets/") && strings.Contains(path, "-")
+	if isHashedAsset {
+		c.Response().Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		c.Response().Header().Set("Cache-Control", "no-cache, must-revalidate")
+	}
+
 	data, err := fs.ReadFile(webui.Files, "dist/"+path)
 	if err != nil {
+		// SPA 兜底：任何未命中的路径都回 index.html（前端路由接管）。
 		data, err = fs.ReadFile(webui.Files, "dist/index.html")
 		if err != nil {
 			return echo.NewHTTPError(http.StatusNotFound, "前端资源未构建（scripts/build.sh）")
 		}
+		// ★ 兜底返回的也是 index.html ⇒ 同样必须 no-cache（否则同上被启发式缓存）
+		c.Response().Header().Set("Cache-Control", "no-cache, must-revalidate")
 	}
 	return c.Blob(http.StatusOK, mimeOf(path), data)
 }

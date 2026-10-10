@@ -32,6 +32,7 @@ async function loadMaster() {
     customers.value = (c.rows || []).filter((r) => Number(r.is_current) === 1)
     materials.value = (m.rows || []).filter((r) => r.kind === '原料' && Number(r.is_current) === 1)
     vehicles.value = (v.rows || []).filter((r) => Number(r.is_current) === 1)
+    err.value = '' // ★ 成功即清错误（否则"未登录时"挂载留下的报错会一直挂着）
   } catch (e) {
     err.value = '加载主数据下拉失败：' + e.message
   }

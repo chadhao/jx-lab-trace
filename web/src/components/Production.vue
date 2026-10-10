@@ -39,6 +39,7 @@ async function loadMaster() {
     const all = (m.rows || []).filter((r) => Number(r.is_current) === 1)
     inMaterials.value = all.filter((r) => r.kind === '原料')
     outMaterials.value = all.filter((r) => r.kind === '成品')
+    err.value = '' // ★ 成功即清错误（否则"未登录时"挂载留下的报错会一直挂着）
   } catch (e) {
     err.value = '加载主数据下拉失败：' + e.message
   }

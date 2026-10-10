@@ -98,7 +98,11 @@ async function logout() {
   <template v-else>
     <p v-if="err" class="err">{{ err }}</p>
 
-    <main>
+    <!-- ★★ `:key` 绑定身份（2026-10-10 修）：
+         原实现不绑 key ⇒ `me` 变化（如刚登录成功）时**组件不重建** ⇒ 子组件在"未登录时"
+         挂载留下的错误（如「加载主数据下拉失败：未登录或会话已失效」）**会一直挂在那**。
+         ⇒ 绑 key 后身份一变就重建子树 ⇒ 数据重新加载、旧错误自动清掉。 -->
+    <main :key="me && me.open_id">
       <Receiving v-if="page === 'recv'" :me="me" />
       <Sampling v-else-if="page === 'sample'" :me="me" />
       <Retention v-else-if="page === 'retain'" :me="me" />
