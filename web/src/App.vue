@@ -16,6 +16,7 @@ import Rpt from './components/Rpt.vue'
 
 const page = ref('recv')
 const me = ref(null)
+const ready = ref(false) // 首次 /api/me 是否已返回（返回前不渲染登录卡/业务页，避免闪现"请先登录"）
 const err = ref('')
 const inspId = ref(null) // 非空 ⇒ 检测 tab 内显示检测单详情
 
@@ -26,6 +27,8 @@ async function loadMe() {
   } catch (e) {
     me.value = null
     err.value = e.status === 401 ? '未登录（或会话已失效）' : e.message
+  } finally {
+    ready.value = true
   }
 }
 onMounted(loadMe)
@@ -84,10 +87,10 @@ async function logout() {
        动因（2026-10-10 实测）：原实现 `/api/me` 401 时**照样渲染业务页**，
        各子组件各自去拉数据、各自报「未登录或会话已失效」，用户看到一屏报错却不知怎么办。
        ⇒ ★ 判据：**鉴权失败的页面必须"引导去登录"，不能"装作已登录"**。 -->
-  <section v-if="!me" class="login-card">
+  <section v-if="ready && !me" class="login-card">
     <h2>请先登录</h2>
     <p v-if="err" class="err">{{ err }}</p>
-    <p class="hint">身份由飞书提供（open_id 为身份主键，**未在系统内映射角色的账号会被拒绝**）。</p>
+    <p class="hint">身份由飞书提供（open_id 为身份主键，未在系统内映射角色的账号会被拒绝）。</p>
     <div class="login-actions">
       <a class="btn-primary" href="/api/auth/feishu/start">用飞书登录</a>
       <button class="ghost" @click="devLogin">开发模式免登</button>
@@ -95,7 +98,7 @@ async function logout() {
     <p class="hint">★ 从飞书工作台点开本应用时，会自动走免登，通常看不到本页。</p>
   </section>
 
-  <template v-else>
+  <template v-else-if="me">
     <p v-if="err" class="err">{{ err }}</p>
 
     <!-- ★★ `:key` 绑定身份（2026-10-10 修）：

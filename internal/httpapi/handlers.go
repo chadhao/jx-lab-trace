@@ -315,6 +315,9 @@ func (s *Server) handleSPA(c echo.Context) error {
 		}
 		// ★ 兜底返回的也是 index.html ⇒ 同样必须 no-cache（否则同上被启发式缓存）
 		c.Response().Header().Set("Cache-Control", "no-cache, must-revalidate")
+		// ★★ 复核修正（N-017 #4）：兜底内容是 index.html，必须按 HTML 报文吐出。
+		//   原实现走 mimeOf(path) ⇒ 无扩展名路径给 application/octet-stream ⇒ 浏览器当下载。
+		return c.Blob(http.StatusOK, "text/html; charset=utf-8", data)
 	}
 	return c.Blob(http.StatusOK, mimeOf(path), data)
 }

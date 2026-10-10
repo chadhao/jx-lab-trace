@@ -386,8 +386,19 @@ func TestTC_M6_06_HTTP_TwoOperations(t *testing.T) {
 		t.Fatalf("查生产批列表应 200，实际 %d", resp.StatusCode)
 	}
 	all, _ := out["rows"].([]interface{})
-	if len(all) != 1 {
-		t.Fatalf("★★ 跨班组记多段，批仍应 1 个，实际 %d", len(all))
+	// ★ 复核修正（N-017，2026-10-10）：列表接口是**全局**的（权限显隐 + LIMIT 500，设计如此），
+	//   测试库又与 e2e / 现场共用（实测残留 created_by=ou_dj_e2e 的 2 条批，2026-10-09 留下）
+	//   ⇒「全表恰好 1 条」是错误假设，与本用例意图无关。
+	//   本用例意图（见上「本作用域」）是：**两段作业不得裂出第二个批** ⇒ 只数本用例创建的批。
+	own := 0
+	for _, r := range all {
+		row, _ := r.(map[string]interface{})
+		if row["created_by"] == m6HTTPOpenID {
+			own++
+		}
+	}
+	if own != 1 {
+		t.Fatalf("★★ 跨班组记多段，本作用域批仍应 1 个，实际 %d（全表 %d 条，含共用库残留）", own, len(all))
 	}
 }
 

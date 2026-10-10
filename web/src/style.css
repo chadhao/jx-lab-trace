@@ -1,10 +1,14 @@
 :root {
-  color-scheme: light dark;
+  /* N-016：固定浅色主题，不随系统深色偏好变化。 */
+  color-scheme: light;
   font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
 }
 
 body {
   margin: 0;
+  /* N-016：显式浅底深字，页面不随系统深色偏好变化（只改 color-scheme 不够）。 */
+  background: #fff;
+  color: #1f2328;
 }
 
 .page {
@@ -90,7 +94,8 @@ button.ghost {
 }
 
 button:disabled {
-  opacity: 0.45;
+  /* N-016：浅色下 0.45 过淡，略提到 0.6 保证可辨。 */
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
@@ -115,8 +120,15 @@ select {
   padding: 0.3rem 0.5rem;
   border: 1px solid rgba(127, 127, 127, 0.45);
   border-radius: 6px;
-  background: transparent;
-  color: inherit;
+  background: #fff;
+  color: #1f2328;
+}
+
+/* N-016：原生控件（含 select 弹出选项列表）显式着色，浅色下白底深字可读。 */
+select option,
+option {
+  background: #fff;
+  color: #1f2328;
 }
 
 table {

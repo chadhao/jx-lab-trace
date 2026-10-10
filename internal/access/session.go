@@ -9,6 +9,7 @@ package access
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -104,8 +105,18 @@ func SessionMiddleware(st *store.Store, o Opts) echo.MiddlewareFunc {
 			now := time.Now()
 
 			sess, err := st.LoadSession(ctx, sid)
-			if err != nil || !sess.Valid(now) {
-				// 会话不存在 / 已过期 / 已登出：浏览器侧也一并清掉
+			if err != nil {
+				// ★ 复核修正（N-017 #1 补全，2026-10-10）：库错误 ≠ 会话不存在。
+				//   原实现 err 一律清 cookie 放行 ⇒ DB 抖动被伪装成"未登录"还顺手把用户踢下线。
+				//   ⇒ 不存在 ⇒ 清 cookie 按未登录走；库错误 ⇒ 如实 500，不动 cookie。
+				if errors.Is(err, store.ErrNoSession) {
+					ClearSessionCookie(c, o)
+					return next(c)
+				}
+				return echo.NewHTTPError(http.StatusInternalServerError, "会话状态检查失败（数据库错误）")
+			}
+			if !sess.Valid(now) {
+				// 已过期 / 已登出：浏览器侧也一并清掉
 				ClearSessionCookie(c, o)
 				return next(c)
 			}
@@ -117,7 +128,12 @@ func SessionMiddleware(st *store.Store, o Opts) echo.MiddlewareFunc {
 			//   且只在「剩余有效期不足一半」时才真续期 ⇒ 首屏并发几乎不写库、不竞争。
 			renewBefore := now.Add(o.TTL / 2)
 			ok, err := st.TouchSession(ctx, sid, now, newExp, renewBefore)
-			if err != nil || !ok {
+			if err != nil {
+				// 库错误如实上报（不伪装成未登录、不清 cookie —— 否则 DB 抖动把用户踢下线）
+				return echo.NewHTTPError(http.StatusInternalServerError, "会话状态检查失败（数据库错误）")
+			}
+			if !ok {
+				// 会话确实无效（不存在 / 撤销 / 过期）
 				ClearSessionCookie(c, o)
 				return next(c)
 			}

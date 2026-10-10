@@ -71,8 +71,6 @@ func (s *Store) LoadSession(ctx context.Context, sessionID string) (Session, err
 
 // TouchSession 滑动续期：把 expires_at 推到 expiresAt 并记 last_seen_at。
 // ★ 只对「未撤销且当前仍有效」的会话续期（过期/已登出的会话不会被续活）。
-// 返回是否续期成功。
-// TouchSession 滑动续期。
 //
 // ★★★ 语义（2026-10-10 修正，实测事故驱动）：
 //
@@ -98,8 +96,16 @@ func (s *Store) TouchSession(ctx context.Context, sessionID string, now, expires
 	}
 	// ② 没命中（= 无需续期）**或写报错**（如并发/锁等待）⇒ 一律**读一次判定会话是否仍有效**。
 	//    ★ 关键：这一步把"没续成"与"会话无效"彻底分开。
+	//    ★ 读失败要分两种：会话不存在 = 确实无效（不是错误）；库错误 = 如实上报，
+	//      不得伪装成"会话无效"（否则 DB 抖动会被吞掉、掩盖成 401）。
 	sess, lerr := s.LoadSession(ctx, sessionID)
-	if lerr != nil || !sess.Valid(now) {
+	if lerr != nil {
+		if errors.Is(lerr, ErrNoSession) {
+			return false, nil // 不存在 ⇒ 无效，但这不是错误
+		}
+		return false, fmt.Errorf("判定会话有效性失败: %w", lerr)
+	}
+	if !sess.Valid(now) {
 		return false, nil // 确实无效/已撤销/已过期
 	}
 	return true, nil // 会话有效，只是无需续期（或续期被并发挡下，但会话没坏）
