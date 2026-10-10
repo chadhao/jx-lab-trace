@@ -132,7 +132,24 @@ while [ "$attempt" -le "$MAX" ]; do
     kill -0 "$MPID" 2>/dev/null || break
     idle=$(( $(now_ts) - $(log_mtime) ))
     if [ "$idle" -gt "$STALL_SECS" ]; then
-      echo "   ⚠ 停滞：日志已静止 ${idle}s（> ${STALL_SECS}s）而进程仍存活 ⇒ 终止本轮并重试"
+      # ★★★ CPU 免死（2026-10-10 实测事故驱动）：
+      #   旧判据**只看日志是否静止** ⇒ **"不写日志" ≠ "没在干活"** —— 长任务（浏览器验收 /
+      #   长推理 / 等外部 IO）本就可能十几分钟不产日志。实测 N-016 派工中 mimo 连续 3 次 attempt
+      #   都在 ~15 分钟处被判停滞终止，而日志显示它当时正在正常干活（改完 CSS、静态判据全过、
+      #   正加载 playwright 做浏览器验收）。
+      #   ⇒ ★ **判据不是越严越好，而是越准越好**：误伤合法用法 ⇒ 对方理性的应对是绕过它。
+      #   ⇒ 补客观证据：**CPU 时间在窗口内增长 ⇒ 在干活 ⇒ 不判停滞**（真卡住 CPU 不涨，仍会被判停滞）。
+      #   ★ 注意：本判据 MUST 落在**本文件**里 —— `check_mimo_stall.py` 是 `pulse.sh` 用的，
+      #     驱动**不消费它**（曾误改它并"自证通过"，实际打空 ⇒ 改判据前先确认「谁在消费它」）。
+      c1="$("$PY" scripts/check_mimo_stall.py --cpu-probe "$MPID" 2>/dev/null || echo -1)"
+      sleep 5
+      c2="$("$PY" scripts/check_mimo_stall.py --cpu-probe "$MPID" 2>/dev/null || echo -1)"
+      if [ "$c1" != "-1" ] && [ "$c2" != "-1" ] && [ "$c2" -gt "$c1" ]; then
+        echo "   ○ 日志静止 ${idle}s，但 **CPU 时间在增长**（${c1}s → ${c2}s）⇒ 在干活，继续等待"
+        sleep "$POLL_SECS"
+        continue
+      fi
+      echo "   ⚠ 停滞：日志已静止 ${idle}s（> ${STALL_SECS}s）而进程仍存活，且 CPU 无增长（${c1}s → ${c2}s）⇒ 终止本轮并重试"
       { echo; echo "[$(date '+%F %T')] ★ 看门狗判定停滞（静止 ${idle}s）—— 终止 PID $MPID"; } >> "$LOG"
       kill "$MPID" 2>/dev/null
       sleep 3

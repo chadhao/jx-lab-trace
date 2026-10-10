@@ -46,6 +46,54 @@
 
 ---
 
+## §0-c · ★★★ 第 3 次续派（2026-10-10 23:40 追加）—— **两个坑都堵上了**
+
+**上轮（第 2 次续派）又被判停滞 3 次终止（934/937/937s）。两个原因都已定位并修好：**
+
+### ★ 坑一：WorkBuddy 的看门狗修复**打空了**（现已修在正确位置）
+
+- ★★ **我改的是 `scripts/check_mimo_stall.py`，但驱动根本不消费它**（那是 `pulse.sh` 用的）
+  ⇒ 我的"自证通过"是**假绿**。★ 判据：**改判据前先确认「谁在消费它」。**
+- ★ 真正的看门狗在 **`drive_mimo.sh` 内部**（判据＝"日志静止 > `STALL_SECS` 且进程存活"）。
+  ⇒ 已在该处加 **CPU 免死**：日志静止时**采样两次 CPU（间隔 5s）**，**增长 ⇒ 判在干活、继续等待**。
+- ★★ **自证（真实进程）**：忙进程 `2s → 7s` ⇒ 免死生效；空转进程 `0s → 0s` ⇒ 仍判停滞。
+  ⇒ **判据变准（不再误杀长任务），但没有放松（真卡住照样杀）。**
+
+### ★ 坑二：你上轮**卡在"浏览器级验收"**（该要求已从任务包删掉）
+
+- ★ 日志显示：你想用浏览器工具打开页面做深色偏好验收，但**本机外层是 PowerShell**，
+  而你按 bash 语法发命令（`export PWCLI=...` ⇒ 报 "无法将 export 项识别为 cmdlet"）
+  ⇒ **反复失败**、长时间不产日志，又撞上旧看门狗。
+- ★ **这不是你的能力问题，是任务包给了一个在本机不成立的要求。**
+- ⇒ ★★ **本轮起：删除"浏览器级验收"，改为"服务端静态断言"**（见 D1 验收）——
+  **本机无法真实模拟"系统深色偏好"，硬做只会假绿；静态断言反而是可复现的真判据。**
+
+### 断点（★ **已完成的不要重做**）
+
+| 状态 | 内容 |
+|---|---|
+| ✅ **已完成** | ① 主题：`color-scheme: light` ＋ `body{background:#fff;color:#1f2328}` ＋ **`select{background:#fff;color:#1f2328}`** ＋ `button:disabled` opacity→0.6；② `web/index.html` 加 `<meta name="color-scheme" content="light">`；③ **`internal/webui/dist` 已重建**；④ `N-017` 复核已落到 `session.go`（★ **库错误 ≠ 会话不存在**，分得对）＋ `handlers.go` ＋ `m6_test.go`；⑤ ★ **你新写了 3 个测试文件**（`internal/httpapi/session_concurrency_test.go`、`internal/httpapi/spa_cache_test.go`、`internal/store/session_concurrency_test.go`）—— **很好，保留**。 |
+| ❌ **未完成** | ① **提交**（工作区仍有未提交改动）；② **回执**（`COLLAB.md` 的 `### N-016` 段内、状态改 `MIMO-DONE`）；③ 门禁复跑。 |
+
+### 本轮要做（★ 比上轮窄，务必收口）
+
+1. ★ **跑门禁**：`bash scripts/check_all.sh` 必绿 11/11（`TouchSession` 签名变过，注意 `internal/access` / `internal/store` 用例）。
+2. ★ **部署到测试服务器并做静态断言**（`bash scripts/deploy-test-server.sh --restart --smoke`）：
+   ```
+   curl -s http://127.0.0.1:18080/ | grep -i 'color-scheme'
+   CSS=$(curl -s http://127.0.0.1:18080/ | grep -oE 'assets/index-[A-Za-z0-9_-]+\.css' | head -1)
+   curl -s http://127.0.0.1:18080/$CSS | grep -oE 'color-scheme:[^;}]+'
+   curl -s http://127.0.0.1:18080/$CSS | grep -oE 'body\{[^}]*\}'
+   curl -s http://127.0.0.1:18080/$CSS | grep -oE '(select|option)\{[^}]*\}'
+   ```
+   ★ 断言：入口 `meta` 为 `light`；CSS 里 `color-scheme` **不含 `dark`**；`body` 有显式 `background`+`color`；**`select`/`option` 有显式 `background`+`color`**（＝用户报的"下拉白底白字"）。
+   ★★ **这五条就是本轮的验收判据**（替代原"浏览器级验收"）。
+3. ★ **提交**（显式路径、**不 push**）。
+4. ★ **写回执**到 `COLLAB.md` 的 `### N-016` 段内、**状态改 `MIMO-DONE`**。
+5. ★ **`git add` 时注意**：`.playwright-cli/` 是验收产物，**不要提交**（删掉或加 `.gitignore`）。
+
+---
+
 ## ★★ D1 · `N-016` 界面改为**浅色主题**（用户明确要求）
 
 **现象（用户原话）**：界面是**黑色主题**，要求改为**白色/浅色**。

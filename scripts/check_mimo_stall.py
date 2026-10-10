@@ -106,10 +106,18 @@ def main() -> int:
     ap.add_argument("--log", default=DEFAULT_LOG)
     ap.add_argument("--max-idle", type=int, default=900, help="日志静止多少秒判停滞")
     ap.add_argument("--pid", type=int, default=0, help="mimo 进程号（给了就一并核存活）")
+    ap.add_argument("--cpu-probe", type=int, default=0, metavar="PID",
+                    help="只做一次 CPU 采样并打印秒数（供外部脚本两次对比用）；不参与停滞判定")
     ap.add_argument("--cpu-sample-sec", type=int, default=5,
                     help="CPU 采样窗口秒数（窗口内 CPU 有增长 ⇒ 判为在干活，不判停滞）")
     a = ap.parse_args()
     a.log = normalize(a.log)
+
+    # ★ 供 drive_mimo.sh 的看门狗调用：单次采样 CPU 秒数（-1 = 取不到）后立即退出。
+    if a.cpu_probe:
+        v = cpu_seconds(a.cpu_probe)
+        print(-1 if v is None else v)
+        return 0
 
     if not os.path.isfile(a.log):
         print("○ 无轮次：日志不存在（%s）—— 视为『没在跑』，非停滞" % a.log)
