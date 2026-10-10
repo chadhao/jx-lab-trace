@@ -19,6 +19,33 @@
 
 ---
 
+## §0-b · ★★ 第 2 次续派（2026-10-10 22:25 追加）
+
+**上一轮（第 2 次 attempt，共 3 次）全部被看门狗误判「停滞」终止。**
+★ **不是你的错** —— 你当时**正在正常干活**：改完 CSS、静态判据三项全过、接着加载 playwright 做**浏览器级深色偏好验收**；
+只是**长任务十几分钟不产日志**，被旧判据（只看日志静止）**误杀**。
+⇒ ★ 已由 WorkBuddy 修正判据：**新增「CPU 时间在采样窗口内增长 ⇒ 在干活 ⇒ 不判停滞」免死条件**（提交 `a5bd9ac`，已自证：忙进程 2s→7s 判活跃、空转进程 0→0 仍判停滞）。**本轮不会再被误杀。**
+
+### 断点（★ **已完成的不要重做**）
+
+| 状态 | 内容 |
+|---|---|
+| ✅ **已完成** | ① `web/src/style.css`：`color-scheme: light` ＋ `body{background:#fff;color:#1f2328}` ＋ **`select{background:#fff;color:#1f2328}`** ＋ `button:disabled` opacity 0.45→0.6；② `web/index.html`：加 `<meta name="color-scheme" content="light">`；③ ★ **`internal/webui/dist` 已重建**（新产物 `index-oR8lcKZx.js` / `index-lylk986w.css`，旧产物已删）；④ `N-017` 复核已落到 `internal/store/session.go`（★ **把「库错误」与「会话不存在」分开**：不存在 ⇒ 无效；库错误 ⇒ **如实上报，不伪装成未登录**）＋ `internal/httpapi/handlers.go` ＋ `internal/httpapi/m6_test.go`。 |
+| ❌ **未完成** | ① **提交**（当前全部改动仍在工作区**未提交**，`git status` 有 8 项）；② **写下回执**（`COLLAB.md` 的 `### N-016` 段内、状态改 `MIMO-DONE`）；③ **浏览器级深色偏好验收的收尾**（你当时正做到这一步被中断）。 |
+
+### 本轮要做
+
+1. ★ **先自查改动是否完整**（尤其 `N-017` 项：`session.go` / `handlers.go` / `m6_test.go` 是否都改到你要的程度）。
+2. ★ **跑门禁**（`bash scripts/check_all.sh` 必绿 11/11），★ 特别是 `internal/access` 与 `internal/store` 的测试（`TouchSession` 签名变过）。
+3. ★ **补完浏览器级验收**（playwright 亦可）：**系统深色偏好下** ⇒ 页面浅色 **且「展开 `<select>` 能看清文字」**（用户明确的必过点）。
+4. ★ **部署到测试服务器并实测**（`bash scripts/deploy-test-server.sh --restart --smoke`）。
+5. ★ **提交**：用**显式路径**（禁止 `git add -A`），**只本地提交、不要 push**。
+6. ★ **写回执**到 `COLLAB.md` 的 `### N-016` 段内，**状态改 `MIMO-DONE`**（★ 判据按**结构化字段**匹配，散文里提到该词不算）。
+
+★ **清理**：验收用的 `.playwright-cli/` 产物**不要提交**（加入 `.gitignore` 或删掉）。
+
+---
+
 ## ★★ D1 · `N-016` 界面改为**浅色主题**（用户明确要求）
 
 **现象（用户原话）**：界面是**黑色主题**，要求改为**白色/浅色**。
