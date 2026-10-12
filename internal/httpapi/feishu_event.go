@@ -19,11 +19,19 @@ import (
 
 // handleFeishuEvent D4.1：飞书事件回调（免权限，飞书服务器调用）。
 //
-//	① URL 校验 challenge 应答；② 验签（X-Lark-Signature，HMAC-SHA256，key=JX_FEISHU_ENCRYPT_KEY）；
-//	③ 解析事件：contact.user.created_v3 ⇒ upsert；contact.user.deleted_v3 ⇒ 停用+会话失效+审计；其余忽略。
+//	① 读 raw → 解密 → 解析；② 若为 URL 校验 challenge ⇒ **豁免签名校验**，
+//	改校验 body 内 token（配置了才校验）⇒ 200 回显 challenge；
+//	③ 否则（真实事件）⇒ **强制验签**（X-Lark-Signature，用 raw body，
+//	算法/头名与 N-018 一字不改）⇒ 解析事件：contact.user.created_v3 ⇒ upsert；
+//	contact.user.deleted_v3 ⇒ 停用+会话失效+审计；其余忽略。
 //
+// ★ N-019：验签**不得**施加于 challenge —— Lark 官方口径
+// "Security verification … (excluding request URL verification)"，
+// 即 URL 校验请求不参与签名校验；N-018 曾对其强制验签 ⇒ 飞书 challenge
+// （不带签名头）被 403 ⇒ 后台报「Challenge code 没有返回」。
 // ★ 未配置 JX_FEISHU_ENCRYPT_KEY ⇒ **404**（明确拒绝，不静默降级）。
 // ★ 验签失败与 challenge/token 失败必须是 **4xx 且不同响应体**（任务包 §8）。
+// ★ challenge 路径禁止任何慢调用（官方要求 1 秒内返回，比事件的 3 秒更严）。
 func (s *Server) handleFeishuEvent(c echo.Context) error {
 	if s.Cfg.FeishuEncryptKey == "" {
 		return echo.NewHTTPError(http.StatusNotFound, "事件回调未启用（未配置 JX_FEISHU_ENCRYPT_KEY）")
@@ -34,14 +42,8 @@ func (s *Server) handleFeishuEvent(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "读取请求体失败")
 	}
 
-	// ② 验签：官方口径 sha256(timestamp + nonce + encrypt_key + body) 的十六进制。
-	if !feishuSignatureOK(c.Request(), raw, s.Cfg.FeishuEncryptKey) {
-		return echo.NewHTTPError(http.StatusForbidden, map[string]interface{}{
-			"error": "签名验证失败",
-		})
-	}
-
-	// 载荷：Encrypt Key 配置后飞书 body 形如 {"encrypt":"base64..."}；也兼容未加密明文。
+	// ① 载荷：Encrypt Key 配置后飞书 body 形如 {"encrypt":"base64..."}；也兼容未加密明文。
+	//    ★ N-019 顺序调整：解密/解析**前置于**验签，以便先识别 challenge（其豁免验签）。
 	payload, err := feishuDecryptPayload(raw, s.Cfg.FeishuEncryptKey)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, map[string]interface{}{
@@ -73,6 +75,30 @@ func (s *Server) handleFeishuEvent(c echo.Context) error {
 		})
 	}
 
+	// ② URL 校验 challenge：**豁免签名校验**（官方口径），改验 body 内 token。
+	//    该路径只做字符串比较，无 DB/网络调用 ⇒ 毫秒级返回。
+	if evt.Type == "url_verification" || evt.Challenge != "" {
+		if evt.Challenge == "" {
+			return echo.NewHTTPError(http.StatusBadRequest, map[string]interface{}{
+				"error": "缺少 challenge",
+			})
+		}
+		// 配置了 verification token 才校验；失败 ⇒ 403，响应体与签名失败**不同**（§8）。
+		if s.Cfg.FeishuVerificationToken != "" && evt.Token != s.Cfg.FeishuVerificationToken {
+			return echo.NewHTTPError(http.StatusForbidden, map[string]interface{}{
+				"error": "verification token 不匹配",
+			})
+		}
+		return c.JSON(http.StatusOK, map[string]string{"challenge": evt.Challenge})
+	}
+
+	// ③ 真实事件：强制验签 —— 算法/头名/raw body 与 N-018 一字不改（事件路径不受豁免波及）。
+	if !feishuSignatureOK(c.Request(), raw, s.Cfg.FeishuEncryptKey) {
+		return echo.NewHTTPError(http.StatusForbidden, map[string]interface{}{
+			"error": "签名验证失败",
+		})
+	}
+
 	// verification_token 一致才认（若配置了）。
 	tok := evt.Token
 	if tok == "" {
@@ -83,16 +109,6 @@ func (s *Server) handleFeishuEvent(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusForbidden, map[string]interface{}{
 			"error": "verification token 不匹配",
 		})
-	}
-
-	// ① URL 校验 challenge 应答。
-	if evt.Type == "url_verification" || evt.Challenge != "" {
-		if evt.Challenge == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, map[string]interface{}{
-				"error": "缺少 challenge",
-			})
-		}
-		return c.JSON(http.StatusOK, map[string]string{"challenge": evt.Challenge})
 	}
 
 	// ③ 事件处理。

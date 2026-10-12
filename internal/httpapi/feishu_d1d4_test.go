@@ -157,13 +157,18 @@ func TestFeishuEvent_Challenge往返(t *testing.T) {
 }
 
 // ★ 签名错 ⇒ 403，且响应体与 token 失败**不同**。
+// ★ N-019：签名错的载体改为**真实事件体** —— challenge 已豁免验签（官方口径
+//
+//	"excluding request URL verification"），对 url_verification 断言 403 已不成立；
+//	断言本身（403 + 点名签名）一字未改。
 func TestFeishuEvent_签名错_403且与token失败响应体不同(t *testing.T) {
 	const key = "enc-key-1"
 	_, e := newEventServer(key, "tok-1")
-	body := []byte(`{"type":"url_verification","challenge":"c","token":"tok-1"}`)
+	evtBody := []byte(`{"schema":"2.0","header":{"event_type":"contact.user.created_v3","token":"tok-1"},` +
+		`"event":{"object":{"open_id":"ou_sig_fixture","name":"n"}}}`)
 
 	// ① 签名错
-	req := httptest.NewRequest(http.MethodPost, "/feishu/event", strings.NewReader(string(body)))
+	req := httptest.NewRequest(http.MethodPost, "/feishu/event", strings.NewReader(string(evtBody)))
 	req.Header.Set("X-Lark-Request-Timestamp", "1")
 	req.Header.Set("X-Lark-Request-Nonce", "n")
 	req.Header.Set("X-Lark-Signature", "deadbeef")
