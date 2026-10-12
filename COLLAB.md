@@ -1593,8 +1593,51 @@
 - **我方立场**：修法＝**challenge 豁免签名校验，改用 body 内 `token` 与配置的 `JX_FEISHU_VERIFICATION_TOKEN` 比对**（配置了才校验）；**事件路径的验签一丝不改**（用 raw body）。兼容明文与加密两种 challenge 形态（后台已配 Encrypt Key ⇒ 实际为加密）。★ 官方要求 challenge **1 秒内**返回。
 - **建议方案**：任务包 **`MIMO-NEXT-FIX-04.md`**（D1 顺序调整与豁免 · D2 五条测试 · D5 交付）。★ 测试必须含「**事件路径签名错 ⇒ 403**」的回归（证明豁免不波及事件）。
 - **制度影响面**：零——仅回调端点的校验顺序；不改 `spec/`、不改权限。
-- **状态**：OPEN
-- **最后更新**：2026-10-12 18:20
+
+**★★ mimo 回执 · 2026-10-12 18:37 · `MIMO-NEXT-FIX-04` 交付完毕（D1 修复 · D2 五条测试 · D5 门禁/部署/实测）；状态改 `MIMO-DONE`**
+
+★ 本段为 `N-019` 段内**局部追加**，未整体重写 `COLLAB.md`（`check_collab.py` / `check_collab_anchors.py` / `check_md_tables.py` 均绿）。
+
+**1. D1 修复（`internal/httpapi/feishu_event.go`）**
+
+- 校验顺序由「read raw → 验签 → decrypt → parse」改为「read raw → **decrypt** → **parse** → 分支」：
+  - **challenge 分支**（`type=url_verification` 或顶层含 `challenge`）：**豁免签名校验**（一级来源：官方 "Security verification … (**excluding request URL verification**)"）；改校验 body 内 `token` ＝ `JX_FEISHU_VERIFICATION_TOKEN`（**配置了才校验**；失败 ⇒ 403 `verification token 不匹配`，响应体与签名失败**不同**）⇒ **200 回显 `challenge`**。该分支只有字符串比较、无 DB/网络调用（官方 1 秒口径；实测 ~1–2ms）。
+  - **事件分支**：`feishuSignatureOK` **一字未动** —— 算法 `hex(sha256(timestamp+nonce+encrypt_key+rawBody))`、头名 `X-Lark-Request-Timestamp/Nonce/Signature`、**raw body**（不解密后再算）；签名错 ⇒ 403 `签名验证失败`（现状不变）⇒ 再按现状校验 verification token ⇒ 处理事件。
+- 明文与加密两种 challenge 形态均兼容（`feishuDecryptPayload` 前置 ⇒ `{"encrypt":…}` 先解密再判类型；后台已配 Encrypt Key ⇒ 实际为加密形态）。
+
+**2. D2 五条测试（`internal/httpapi/feishu_n019_test.go` ＋ 既有用例）**
+
+1. ★ 明文 `url_verification`、**无签名头** ⇒ 200 回显，且断言 **<1 秒**（官方口径）。
+2. ★ 加密 `url_verification` ⇒ **按官方算法构造真实密文**（key=`sha256(encryptKey)`、随机 IV 前置、PKCS7、base64，与 `feishuAESDecrypt` 互逆）⇒ 200 回显。
+3. ★ challenge **token 错** ⇒ 403，响应体点名 token 且 **≠** 签名失败响应体（对照组同测内构造）。
+4. ★ **回归**：`created_v3` **签名错 ⇒ 403 签名验证失败**（豁免不波及事件）；**签名对 ⇒ 进入事件处理器**（缺 `open_id` ⇒ 400 钉住「已过验签进 handler」；完整 `created_v3 ⇒ 200 upsert` 由 DB 集成用例 `TestTC_FeishuEvent_UserCreated_Upsert幂等` 在服务器 `JX_TEST_DB=1` 真跑通过）；未知真实事件签名对 ⇒ 200 `ignored`。
+5. ★ **既有 `N-018` 测试全绿**（本机 `go test ./...` ＋ 服务器全套 TC 均 0 FAIL）。
+- ★ **如实声明（对一处既有用例的载体调整）**：`TestFeishuEvent_签名错_403且与token失败响应体不同` 原以 `url_verification` 体作「签名错」载体 —— challenge 豁免验签后该断言与新规格直接矛盾，故载体改为**真实事件体**；**断言本身（403 ＋ 点名签名 ＋ 与 token 失败响应体不同）一字未改**。
+
+**3. D5 门禁 / 部署 / curl 实测**
+
+- 门禁：`bash scripts/check_all.sh` ⇒ **必绿 11/11 全绿**，会报 2 项无命中，exit 0。
+- 部署：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ 新 PID 222027；`/healthz` 200、`version=b16aefe`（= 代码提交、**非 dirty**）、`dev=true`；reportd 同起。★ 部署前先把服务器 `.env` 逐字节同步回本地 `.env.deploy`（md5 一致 `d63fde30…`）——避免 scp 上行冲掉服务器侧 `JX_DB_DSN`/`JX_FEISHU_*` 等键（本地旧文件缺这些键）。
+- ★ **curl 实测 challenge 往返（测试服务器 127.0.0.1:18080，修复前/后对照，探针 `_probe/n019_challenge_probe.sh`）**：
+
+| 用例 | 修复前（eb1fc58） | 修复后（b16aefe） |
+| --- | --- | --- |
+| A 明文 challenge、无签名头、token 正确 | **403 `签名验证失败`**（根因复现） | **200 回显 challenge**（1.98ms） |
+| B 明文 challenge、正确签名 | 200 回显 | 200 回显（0.97ms） |
+| C 明文 challenge、token 错误 | 403 `签名验证失败` | **403 `verification token 不匹配`**（与签名失败响应体不同） |
+| D 真实事件、签名错 | 403 `签名验证失败` | 403 `签名验证失败`（回归不破） |
+| E 真实事件、签名对 | 200 `ignored` | 200 `ignored`（事件路径不破） |
+
+- 服务器全套 TC（`bash scripts/run_tc_server.sh`，7 包自动发现、`JX_TEST_DB=1`）：access 9 · audit 3 · codec 6 · config 8 · httpapi 110 · permission 4 · store 88 ＝ **228 PASS / 0 FAIL / 0 SKIP**。
+- 提交：**显式路径、只本地提交（代码＋测试 `b16aefe`，本回执另行一提），不 push**。
+
+★ **如实声明的未做项**
+
+1. ★ **真实飞书 challenge 联调未做** —— 需**用户在飞书后台重新点一次「保存」回调地址**才能对线上闭环（本次修复正是让那一步通过）；开发期以判定性 curl 前后对照 ＋ 单测（明文/加密/回归）为准。
+2. **加密形态 challenge 未在服务器 curl 实测** —— 按任务包 D5「明文构造即可，加密路径由单测覆盖」执行；密文路径由 `TestN019_Challenge加密_200回显`（官方算法真实密文）承担。
+
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-12 18:37
 
 ## 5. 已决议
 
