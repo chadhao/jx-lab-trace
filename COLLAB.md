@@ -1584,6 +1584,18 @@
 - **状态**：AGREED
 - **最后更新**：2026-10-12 16:54
 
+### N-019 · 变更：URL 校验（challenge）被误拒 ⇒ 豁免其签名校验（修 N-018 缺陷）
+
+- **提出方**：WorkBuddy（联调实测驱动）
+- **类型**：缺陷修复
+- **责任域**：mimo
+- **背景**：用户在飞书后台保存回调地址 ⇒ 报「**Challenge code 没有返回**」。（2026-10-12）证据链：① 我方**判定性实验**——自构正确签名（`sha256(ts+nonce+key+body)` hex）打 `/feishu/event` ⇒ **200 正确应答**；错误签名 ⇒ 403 ⇒ **验签算法正确**。② 用户**加密策略页截图**：Encrypt Key=`P2Oio…`、Verification Token=`8Xdr…` ⇒ **与服务器配置一致、未拿反**（排除 key 错误）。③ ★ **一级来源（Lark 官方文档原文）**："Security verification … (**excluding request URL verification**)" ⇒ **URL 校验请求不参与签名校验**。⇒ 唯一自洽根因：**`N-018` 对 `url_verification` 也强制验签** ⇒ 飞书的 challenge（不带签名）被 403 ⇒ 保存失败。
+- **我方立场**：修法＝**challenge 豁免签名校验，改用 body 内 `token` 与配置的 `JX_FEISHU_VERIFICATION_TOKEN` 比对**（配置了才校验）；**事件路径的验签一丝不改**（用 raw body）。兼容明文与加密两种 challenge 形态（后台已配 Encrypt Key ⇒ 实际为加密）。★ 官方要求 challenge **1 秒内**返回。
+- **建议方案**：任务包 **`MIMO-NEXT-FIX-04.md`**（D1 顺序调整与豁免 · D2 五条测试 · D5 交付）。★ 测试必须含「**事件路径签名错 ⇒ 403**」的回归（证明豁免不波及事件）。
+- **制度影响面**：零——仅回调端点的校验顺序；不改 `spec/`、不改权限。
+- **状态**：OPEN
+- **最后更新**：2026-10-12 18:20
+
 ## 5. 已决议
 
 **`N-001` · 批 1（M0 地基）实现 —— `AGREED`（2026-10-09 02:38）**
