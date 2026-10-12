@@ -50,6 +50,9 @@ func (s *Server) Handler() *echo.Echo {
 	// —— 免权限入口 ——
 	e.GET("/healthz", s.handleHealthz)
 
+	// ★ D4.1 飞书事件回调（免权限，飞书服务器调用；未配置密钥 ⇒ 端点 404）。
+	e.POST("/feishu/event", s.handleFeishuEvent)
+
 	// —— 认证 ——
 	auth := e.Group("/api/auth")
 	if s.Cfg.DevMode {
@@ -90,6 +93,10 @@ func (s *Server) Handler() *echo.Echo {
 		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelAll))
 	admin.GET("/user-roles", s.handleListUserRoles,
 		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelRead))
+	// ★ D3.2 飞书组织同步（手动）：复用 sys.user.manage（账号域，不新增权限点）。
+	//   只 upsert m_user，不删除、不绑角色。
+	admin.POST("/org/sync", s.handleOrgSync,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelAll))
 	admin.GET("/user-roles/:open_id", s.handleGetUserRoles,
 		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelRead))
 	admin.POST("/user-roles", s.handleBindUserRole,

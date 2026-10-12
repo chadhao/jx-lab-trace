@@ -19,6 +19,18 @@ const me = ref(null)
 const ready = ref(false) // 首次 /api/me 是否已返回（返回前不渲染登录卡/业务页，避免闪现"请先登录"）
 const err = ref('')
 const inspId = ref(null) // 非空 ⇒ 检测 tab 内显示检测单详情
+// ★ D2（2026-10-12）：dev 登录入口按 /healthz 的 dev 标志显隐。
+//   缺省 false = 安全默认（拿不到 healthz 就不暴露 dev 入口）；dev=true 时照旧。
+const devMode = ref(false)
+
+async function loadDevMode() {
+  try {
+    const h = await api.get('/healthz')
+    devMode.value = !!h.dev
+  } catch (e) {
+    devMode.value = false // healthz 不可用 ⇒ 隐藏 dev 入口（生产期不暴露）
+  }
+}
 
 async function loadMe() {
   try {
@@ -31,7 +43,10 @@ async function loadMe() {
     ready.value = true
   }
 }
-onMounted(loadMe)
+onMounted(async () => {
+  await loadDevMode()
+  await loadMe()
+})
 
 const roleText = computed(() => {
   if (!me.value) return ''
@@ -78,7 +93,7 @@ async function logout() {
         <button class="ghost" @click="logout">退出</button>
       </template>
       <template v-else>
-        <button @click="devLogin">dev 登录</button>
+        <button v-if="devMode" @click="devLogin">dev 登录</button>
       </template>
     </div>
   </header>
@@ -93,7 +108,7 @@ async function logout() {
     <p class="hint">身份由飞书提供（open_id 为身份主键，未在系统内映射角色的账号会被拒绝）。</p>
     <div class="login-actions">
       <a class="btn-primary" href="/api/auth/feishu/start">用飞书登录</a>
-      <button class="ghost" @click="devLogin">开发模式免登</button>
+      <button v-if="devMode" class="ghost" @click="devLogin">开发模式免登</button>
     </div>
     <p class="hint">★ 从飞书工作台点开本应用时，会自动走免登，通常看不到本页。</p>
   </section>

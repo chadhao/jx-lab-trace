@@ -50,6 +50,14 @@ func (s *Server) handleDevLogin(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "缺少 open_id")
 	}
 	expires, err := s.openSession(c, openID, openID, "dev_login")
+	if errors.Is(err, ErrLoginDenied) {
+		// ★ dev 桩的拒绝**保持 JSON 不变**（给开发/测试用，不是真实用户第一屏）。
+		return echo.NewHTTPError(http.StatusForbidden, map[string]interface{}{
+			"error":   "未映射任何角色，拒绝登录",
+			"open_id": openID,
+			"hint":    "deny by default：s_user_role 中无该 open_id 的绑定",
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -79,26 +87,77 @@ func (s *Server) handleFeishuStart(c echo.Context) error {
 
 // handleFeishuCallback 真实模式第二步：code 换 open_id → 查角色 → 建会话。
 // ★ 未映射角色 ⇒ 拒绝（与 dev 桩同一套 deny by default 判定）。
+// ★★ D1（2026-10-12）：真实用户的**拒绝路径一律回极简 HTML 页**，不再回裸 JSON。
+//
+//	那是新用户可能看到的第一屏，必须独立成立（不依赖前端路由/JS）。
+//	dev 桩（handleDevLogin）的拒绝**仍保持 JSON** —— 那是给开发/测试的。
 func (s *Server) handleFeishuCallback(c echo.Context) error {
 	if s.Feishu == nil {
-		return echo.NewHTTPError(http.StatusServiceUnavailable, "未配置飞书应用凭据")
+		// 未配置凭据时真实用户也可能误入本回调 —— 同样给友好页（不再裸 JSON/503）。
+		return s.renderLoginDeniedHTML(c, http.StatusServiceUnavailable,
+			"登录服务暂未就绪",
+			"系统尚未配置飞书登录应用。请联系管理员完成配置后再试。")
 	}
 	code := c.QueryParam("code")
 	if code == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "缺少 code")
+		return s.renderLoginDeniedHTML(c, http.StatusBadRequest,
+			"登录未完成",
+			"飞书跳转时没有带登录凭证（code）。请回到首页，点「用飞书登录」重试。")
 	}
 	ident, err := s.Feishu.Exchange(c.Request().Context(), code, s.callbackURI(c))
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadGateway, "飞书换 open_id 失败："+err.Error())
+		// ★ 不把内部错误详情甩给用户（err 里可能有上游 code/msg）——记服务端日志即可。
+		c.Logger().Warn("飞书换 open_id 失败: ", err)
+		return s.renderLoginDeniedHTML(c, http.StatusBadGateway,
+			"飞书身份校验未通过",
+			"暂时无法确认你的飞书身份。请稍后重试；若持续失败，请联系管理员。")
 	}
 	name := ident.Name
 	if name == "" {
 		name = ident.OpenID
 	}
 	if _, err := s.openSession(c, ident.OpenID, name, "feishu_login"); err != nil {
+		if errors.Is(err, ErrLoginDenied) {
+			return s.renderLoginDeniedHTML(c, http.StatusForbidden,
+				"暂无法登录本系统",
+				"你的账号还没有被分配系统角色。请联系管理员为你开通后再登录。")
+		}
 		return err
 	}
 	return c.Redirect(http.StatusFound, "/")
+}
+
+// renderLoginDeniedHTML 输出**极简服务端渲染**的登录拒绝页（D1）。
+// ★ 无 JS、无外部资源、无前端路由依赖 —— 独立成立。
+func (s *Server) renderLoginDeniedHTML(c echo.Context, status int, title, reason string) error {
+	html := `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>` + title + ` · 江熙新材实验检测数据追踪</title>
+<style>
+body{font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  margin:0;padding:2rem;background:#f6f7f9;color:#1f2937;line-height:1.6}
+.card{max-width:28rem;margin:4rem auto;background:#fff;border:1px solid #e5e7eb;
+  border-radius:8px;padding:1.75rem}
+h1{font-size:1.25rem;margin:0 0 .75rem}
+p{margin:.5rem 0}
+.hint{color:#6b7280;font-size:.9rem}
+a.btn{display:inline-block;margin-top:1.25rem;padding:.5rem 1rem;background:#2563eb;
+  color:#fff;text-decoration:none;border-radius:6px}
+</style>
+</head>
+<body>
+<main class="card">
+<h1>` + title + `</h1>
+<p>` + reason + `</p>
+<p class="hint">遇到问题？请联系管理员。</p>
+<a class="btn" href="/">返回首页</a>
+</main>
+</body>
+</html>`
+	return c.HTML(status, html)
 }
 
 // handleLogout 登出：立即失效（写 revoked_at），且重启后仍失效。
@@ -212,23 +271,29 @@ func (s *Server) handleListAudit(c echo.Context) error {
 
 // ---- 内部工具 ----
 
+// ErrLoginDenied 是「未映射任何角色 / 账号已停用」的统一拒绝哨兵。
+// ★ 由调用方决定呈现方式：dev 桩回裸 JSON（开发用）；飞书回调回友好 HTML 页（D1）。
+var ErrLoginDenied = errors.New("未映射任何角色或账号已停用，拒绝登录")
+
 // openSession 建会话的统一路径（dev 桩与飞书回调共用）：
-// 查角色 ⇒ 无角色即拒绝 ⇒ 落库 ⇒ 下发 cookie ⇒ 装载主体 ⇒ 记审计。
-// 返回会话过期时间；响应体由调用方决定（dev 登录回 JSON，飞书回调回跳转）。
+// 查状态/角色 ⇒ 停用或无角色即拒绝 ⇒ 落库 ⇒ 下发 cookie ⇒ 装载主体 ⇒ 记审计。
+// 返回会话过期时间；响应体由调用方决定（dev 登录回 JSON，飞书回调回跳转/HTML）。
 func (s *Server) openSession(c echo.Context, openID, name, how string) (time.Time, error) {
 	var zero time.Time
 	ctx := c.Request().Context()
+	// ★ D4 离职停用：status=停用 ⇒ 拒绝再登录（会话批量失效由事件处理负责）。
+	if st, err := s.Store.UserStatus(ctx, openID); err != nil {
+		return zero, echo.NewHTTPError(http.StatusInternalServerError, "查询用户状态失败")
+	} else if st == "停用" {
+		return zero, ErrLoginDenied
+	}
 	roles, err := s.Store.RolesOf(ctx, openID)
 	if err != nil {
 		return zero, echo.NewHTTPError(http.StatusInternalServerError, "查询角色失败")
 	}
 	if len(roles) == 0 {
 		// ★ UC-M0-01：未映射任何角色 ⇒ 拒绝（deny by default）
-		return zero, echo.NewHTTPError(http.StatusForbidden, map[string]interface{}{
-			"error":   "未映射任何角色，拒绝登录",
-			"open_id": openID,
-			"hint":    "deny by default：s_user_role 中无该 open_id 的绑定",
-		})
+		return zero, ErrLoginDenied
 	}
 	if name == "" {
 		name = openID

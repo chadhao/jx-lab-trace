@@ -1535,8 +1535,54 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-02.md`** 的 **D1（登录被拒友好页）· D2（dev 入口按 `healthz.dev` 显隐）· D3（组织同步：只 upsert `s_user`，绝不自动绑角色、不删除）· D4（事件回调：challenge＋验签＋入职建号/离职停用且会话当场失效）**。★ **不新增权限点**（51 点冻结）：D3.2 复用现有 `sys.*` 管理域点，选择理由写入回执。★ **D4 的联调验收依赖用户在飞书后台配置**（权限＋通讯录范围＋事件订阅＋发版），开发期以单测为准，联调单独排。
 - **建议方案**：按任务包 D1–D5 执行；回执写在本段、状态改 `MIMO-DONE`；**只本地提交不 push**，由 WorkBuddy 独立验收后推送。
 - **制度影响面**：D1/D2 为表现层与入口显隐；**D3/D4 涉及新增管理接口与回调端点，但均复用/落在本系统既有表（`s_user`/`s_session`/审计），不改 `spec/` 冻结口径**；★ 若实现中发现必须新增权限点或改表，**停手开新议题**，不得自行扩权。
-- **状态**：OPEN
-- **最后更新**：2026-10-12 16:25
+
+**★★ mimo 回执 · 2026-10-12 16:54 · `MIMO-NEXT-FIX-02` 交付完毕（D1–D5 全落位）；状态改 `MIMO-DONE`**
+
+★ 本段为 `N-018` 段内**局部追加**，未整体重写 `COLLAB.md`（`check_collab.py` / `check_collab_anchors.py` / `check_md_tables.py` 均绿）。
+
+**1. D1 登录被拒友好页（替代裸 JSON）**
+
+- `handleFeishuCallback` 拒绝路径（缺 code / 换 token 失败 / 未映射角色 / **飞书未配置**）一律 `renderLoginDeniedHTML`：极简服务端渲染 HTML（内联 CSS、**无 JS、无前端路由依赖**），含人话原因、「联系管理员」、`href="/"` 回首页。
+- `ErrLoginDenied` 哨兵分流呈现：**飞书回调 ⇒ HTML**；**`handleDevLogin` 拒绝 ⇒ 保持 JSON 不变**（开发/测试用）。
+- 测试服务器 curl 实测：无 code / 伪造 code ⇒ `Content-Type: text/html; charset=UTF-8` 且 body 含「联系管理员」（`_probe/n018_accept.sh` 全 PASS）。
+
+**2. D2 dev 入口按 `healthz.dev` 显隐**
+
+- `web/src/App.vue`：启动时 `GET /healthz` → `devMode`；登录卡「开发模式免登」＋右上角「dev 登录」均 `v-if="devMode"`；**healthz 失败 ⇒ 默认隐藏**（安全缺省）。
+- 已跑 `bash scripts/build.sh` 重建 dist 并内嵌（`index-Ezkd3wD4.js`）。
+- 实测：`dev=true`（测试服常态）⇒ JS 含门控且按钮在 `dev=true` 下照旧；**临时切 `JX_DEV_MODE=false` 重启 ⇒ `healthz.dev=false`，`POST /dev-login` 路由未挂载（405），随后已还原 `dev=true`**。★ 说明：SPA 字符串仍编译进 JS 属正常；**渲染结果由 `v-if` 控制**，行为判据以 healthz 标志 + 路由挂载为准。
+
+**3. D3 飞书组织同步（U10）**
+
+- `internal/access/feishu.go`：`TenantAccessToken`（POST `auth/v3/tenant_access_token/internal`，app_id+app_secret）· `ListChildDepartments` · `ListUsersByDepartment`（GET `contact/v3/users/find_by_department`，**tenant_access_token**、`department_id_type=open_department_id`、分页）；端点已按官方文档核对（2026-10-12）。
+- `POST /api/admin/org/sync`：**权限点复用 `sys.user.manage`（LevelAll）——不新增权限点**。理由：写目标是 `m_user` 账号行，与现有「用户与角色管理」（`/api/admin/user-roles*`）同域；`sys.audit.view` 只读、`sys.perm.edit` 管权限字典、`sys.param.edit` 管参数，均不贴题。
+- 行为：递归部门 → 逐部门用户（open_id 去重）→ **upsert `m_user`**；**只建/更新、不删除、不动 `s_user_role`、不自动绑角色**；停用状态**不被同步复活**。返回 created/updated/skipped 统计；重复调用幂等。
+- ★ **表名口径**：任务包行文写 `s_user`；机读件 `spec/schema.sql` 账号表为 **`m_user`**（N-002 判例：以机读为准）。**未改 schema**。
+- 形状断言（`internal/access/feishu_org_test.go`）：Authorization=Bearer、app_id/app_secret 字段名、分页 page_token、department_id_type。
+
+**4. D4 飞书事件回调**
+
+- `POST /feishu/event`（免权限）：**未配置 `JX_FEISHU_ENCRYPT_KEY` ⇒ 404**；验签 `X-Lark-Signature = hex(sha256(timestamp+nonce+encrypt_key+body))`；兼容 `{"encrypt":...}` AES 解密与明文；`url_verification` challenge 往返；verification_token 不匹配与验签失败 **4xx 且不同响应体**。
+- `contact.user.created_v3` ⇒ upsert `m_user`（不绑角色）；`contact.user.deleted_v3` ⇒ **停用 + 全部活跃会话当场失效 + 拒再登录 + 审计**（`m_user`/`disable` by `feishu`）；其余事件 **200 ignored + debug 日志**。
+- 配置进 `.env.deploy.example`：`JX_FEISHU_ENCRYPT_KEY` / `JX_FEISHU_VERIFICATION_TOKEN`（空 ⇒ 端点 404）。
+- `openSession` 增加 `m_user.status=停用 ⇒ ErrLoginDenied`（拒再登录）。
+
+**5. D5 门禁 / 部署 / 提交**
+
+- `bash scripts/check_all.sh` ⇒ **必绿 11/11 全绿**，会报 2 项无命中，exit 0。
+- `bash scripts/deploy-test-server.sh --restart --smoke` ⇒ 新 PID；`/healthz` 200；D1/D2/D3 未授权 401/D4 未配置 404 远端 curl 全 PASS。
+- DB 集成用例（D3 幂等 upsert、D4 created 幂等、D4 deleted 会话失效/拒再登录/审计）入库；本机按 docs/05 以 `JX_TEST_DB` 门控跳过，**需在测试服务器 `JX_TEST_DB=1` 全套复跑**（见未做项）。
+- 提交：显式路径、只本地提交、**不 push**。
+
+★ **如实声明的未做项**
+
+1. ★ **真实飞书通讯录联调未做** —— 需用户在开发者后台配好应用凭据、通讯录权限范围（三层：权限范围/可用范围/API 权限）并**发版**后，才能对真组织树同步；开发期以 httptest 假飞书形状断言为准。
+2. ★ **飞书事件订阅联调未做** —— 需用户在飞书后台配事件订阅 + 回调地址 `http://office.hunanyichu.com:5502/feishu/event` + 权限 + 发版；开发期以单测（challenge 往返 / 签名错 403 / created 幂等 / deleted 会话失效）为准，**联调单独排**。
+3. **`sys.user.manage` 门下的同步管理按钮 UI 未做** —— 任务包 D3.2 只要求接口；前端手动同步按钮可随用户触发再加（不改权限口径）。
+4. **D2 在「真浏览器 DOM 渲染」层面未逐帧截图验收** —— 判据由 healthz 标志 + `v-if` 门控逻辑 + dev=true 路径实测 + dev=false 时路由未挂载承担；如需像素级确认可在 dev=false 环境用浏览器打开登录卡。
+
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-12 16:54
 
 ## 5. 已决议
 

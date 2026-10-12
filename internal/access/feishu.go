@@ -26,6 +26,11 @@ type FeishuClient struct {
 	AuthorizeURLOverride string
 	TokenURLOverride     string
 	UserInfoURLOverride  string
+
+	// ★ D3 组织同步端点覆写（形状断言测试用；生产不设）。
+	TenantTokenURLOverride   string
+	DeptChildrenURLOverride  string
+	DeptUsersURLOverrideBase string // 前缀；实际路径拼 department_id
 }
 
 // ★★★ 官方端点（据 open.feishu.cn 开发文档，2026-08-25 更新）：
@@ -48,6 +53,14 @@ const (
 	feishuAuthorizeURL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
 	feishuTokenURL     = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
 	feishuUserInfoURL  = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+
+	// ★ D3 组织同步（2026-10-12 按官方文档核对）：
+	//   租户凭据 https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal
+	//   部门子列表 https://open.feishu.cn/document/server-docs/contact-v3/department/children
+	//   部门用户   https://open.feishu.cn/document/server-docs/contact-v3/user/find_by_department
+	feishuTenantTokenURL   = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+	feishuDeptChildrenURL  = "https://open.feishu.cn/open-apis/contact/v3/departments/%s/children"
+	feishuDeptUsersURLBase = "https://open.feishu.cn/open-apis/contact/v3/users/find_by_department"
 
 	// feishuScope 是免登所需的用户授权范围：取用户基本信息（含姓名）。
 	// ★ 官方：`scope` 为空格分隔、区分大小写；**若未在开发者后台申请对应权限，授权时报 20027**。
@@ -178,4 +191,196 @@ func (f *FeishuClient) Exchange(ctx context.Context, code, redirectURI string) (
 		return ident, fmt.Errorf("飞书未返回 open_id（code=%d msg=%s）", ui.Code, ui.Msg)
 	}
 	return Identity{OpenID: ui.Data.OpenID, Name: ui.Data.Name}, nil
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// D3 组织同步（2026-10-12）：tenant_access_token → 递归部门 → 逐部门拉用户。
+// ★ 服务端同步**必须用 tenant 身份**（应用身份）；user_access_token 的过滤范围不同。
+// ══════════════════════════════════════════════════════════════════════════
+
+func (f *FeishuClient) tenantTokenEndpoint() string {
+	if f.TenantTokenURLOverride != "" {
+		return f.TenantTokenURLOverride
+	}
+	return feishuTenantTokenURL
+}
+
+func (f *FeishuClient) deptChildrenEndpoint(departmentID string) string {
+	base := f.DeptChildrenURLOverride
+	if base == "" {
+		base = feishuDeptChildrenURL
+	}
+	return strings.Replace(base, "%s", url.PathEscape(departmentID), 1)
+}
+
+func (f *FeishuClient) deptUsersEndpoint() string {
+	if f.DeptUsersURLOverrideBase != "" {
+		return f.DeptUsersURLOverrideBase
+	}
+	return feishuDeptUsersURLBase
+}
+
+// TenantAccessToken 取租户级凭据（官方：POST auth/v3/tenant_access_token/internal，
+// 请求体 app_id+app_secret；响应 code/msg/tenant_access_token/expire）。
+func (f *FeishuClient) TenantAccessToken(ctx context.Context) (string, error) {
+	body, _ := json.Marshal(map[string]string{
+		"app_id":     f.AppID,
+		"app_secret": f.AppSecret,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.tenantTokenEndpoint(), strings.NewReader(string(body)))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+
+	resp, err := f.httpClient().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("飞书取 tenant_access_token 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var tok struct {
+		Code              int    `json:"code"`
+		Msg               string `json:"msg"`
+		TenantAccessToken string `json:"tenant_access_token"`
+		Expire            int    `json:"expire"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tok); err != nil {
+		return "", fmt.Errorf("飞书 tenant_access_token 响应解析失败: %w", err)
+	}
+	if tok.TenantAccessToken == "" {
+		return "", fmt.Errorf("飞书 tenant_access_token 被拒（code=%d msg=%s）", tok.Code, tok.Msg)
+	}
+	return tok.TenantAccessToken, nil
+}
+
+// OrgUser 是通讯录同步需要的最小用户形状（★ 不取手机号等敏感字段——一期用不到就别申请）。
+type OrgUser struct {
+	OpenID string
+	Name   string
+}
+
+// DeptNode 是部门树节点（只取递归所需字段）。
+type DeptNode struct {
+	OpenDepartmentID string
+	Name             string
+}
+
+// ListChildDepartments 拉某部门的直接子部门（官方：GET contact/v3/departments/{id}/children）。
+// departmentID=0 表示根部门；★ 全员通讯录权限范围内才可用。
+func (f *FeishuClient) ListChildDepartments(ctx context.Context, tenantToken, departmentID string) ([]DeptNode, error) {
+	var out []DeptNode
+	pageToken := ""
+	for {
+		u, err := url.Parse(f.deptChildrenEndpoint(departmentID))
+		if err != nil {
+			return nil, err
+		}
+		q := u.Query()
+		q.Set("department_id_type", "open_department_id")
+		q.Set("fetch_child", "false")
+		q.Set("page_size", "50")
+		if pageToken != "" {
+			q.Set("page_token", pageToken)
+		}
+		u.RawQuery = q.Encode()
+
+		var page struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				HasMore   bool   `json:"has_more"`
+				PageToken string `json:"page_token"`
+				Items     []struct {
+					OpenDepartmentID string `json:"open_department_id"`
+					Name             string `json:"name"`
+				} `json:"items"`
+			} `json:"data"`
+		}
+		if err := f.getJSON(ctx, tenantToken, u.String(), &page); err != nil {
+			return nil, err
+		}
+		if page.Code != 0 {
+			return nil, fmt.Errorf("飞书列子部门被拒（code=%d msg=%s）", page.Code, page.Msg)
+		}
+		for _, it := range page.Data.Items {
+			if it.OpenDepartmentID == "" {
+				continue
+			}
+			out = append(out, DeptNode{OpenDepartmentID: it.OpenDepartmentID, Name: it.Name})
+		}
+		if !page.Data.HasMore || page.Data.PageToken == "" {
+			return out, nil
+		}
+		pageToken = page.Data.PageToken
+	}
+}
+
+// ListUsersByDepartment 拉某部门**直接**下属用户（官方：GET contact/v3/users/find_by_department）。
+// ★ 必须 tenant_access_token；department_id_type=open_department_id；分页 page_token/page_size。
+func (f *FeishuClient) ListUsersByDepartment(ctx context.Context, tenantToken, departmentID string) ([]OrgUser, error) {
+	var out []OrgUser
+	pageToken := ""
+	for {
+		u, err := url.Parse(f.deptUsersEndpoint())
+		if err != nil {
+			return nil, err
+		}
+		q := u.Query()
+		q.Set("department_id", departmentID)
+		q.Set("department_id_type", "open_department_id")
+		q.Set("user_id_type", "open_id")
+		q.Set("page_size", "50")
+		if pageToken != "" {
+			q.Set("page_token", pageToken)
+		}
+		u.RawQuery = q.Encode()
+
+		var page struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+			Data struct {
+				HasMore   bool   `json:"has_more"`
+				PageToken string `json:"page_token"`
+				Items     []struct {
+					OpenID string `json:"open_id"`
+					Name   string `json:"name"`
+				} `json:"items"`
+			} `json:"data"`
+		}
+		if err := f.getJSON(ctx, tenantToken, u.String(), &page); err != nil {
+			return nil, err
+		}
+		if page.Code != 0 {
+			return nil, fmt.Errorf("飞书拉部门用户被拒（code=%d msg=%s）", page.Code, page.Msg)
+		}
+		for _, it := range page.Data.Items {
+			if it.OpenID == "" {
+				continue
+			}
+			out = append(out, OrgUser{OpenID: it.OpenID, Name: it.Name})
+		}
+		if !page.Data.HasMore || page.Data.PageToken == "" {
+			return out, nil
+		}
+		pageToken = page.Data.PageToken
+	}
+}
+
+// getJSON 带 Bearer 的 GET（组织同步共用）。
+func (f *FeishuClient) getJSON(ctx context.Context, token, rawURL string, dst interface{}) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := f.httpClient().Do(req)
+	if err != nil {
+		return fmt.Errorf("飞书请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(dst); err != nil {
+		return fmt.Errorf("飞书响应解析失败: %w", err)
+	}
+	return nil
 }

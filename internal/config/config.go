@@ -31,6 +31,8 @@ type Config struct {
 	DevOpenID               string        // JX_DEV_OPEN_ID：dev 模式固定身份
 	FeishuAppID             string        // JX_FEISHU_APP_ID：真实飞书免登
 	FeishuAppSecret         string        // JX_FEISHU_APP_SECRET
+	FeishuEncryptKey        string        // JX_FEISHU_ENCRYPT_KEY：事件回调验签密钥（D4）
+	FeishuVerificationToken string        // JX_FEISHU_VERIFICATION_TOKEN：事件回调 token（D4）
 	SessionTTL              time.Duration // JX_SESSION_TTL：缺省 12h
 	BootstrapSysAdminOpenID string        // JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID：首个系统管理员引导
 	HTTPAddr                string        // JX_HTTP_ADDR：缺省 127.0.0.1:8080
@@ -75,6 +77,10 @@ func Load() (Config, error) {
 	if (c.FeishuAppID == "") != (c.FeishuAppSecret == "") {
 		return c, fmt.Errorf("JX_FEISHU_APP_ID 与 JX_FEISHU_APP_SECRET 必须成对提供")
 	}
+
+	// ★ D4 事件回调：未配置 ⇒ 端点整体 404（明确拒绝，不静默降级）；值由用户从飞书后台取。
+	c.FeishuEncryptKey = strings.TrimSpace(os.Getenv("JX_FEISHU_ENCRYPT_KEY"))
+	c.FeishuVerificationToken = strings.TrimSpace(os.Getenv("JX_FEISHU_VERIFICATION_TOKEN"))
 
 	c.SessionTTL = defaultSessionTTL
 	if v := strings.TrimSpace(os.Getenv("JX_SESSION_TTL")); v != "" {
@@ -169,11 +175,16 @@ func (c Config) Describe() []string {
 	if c.FeishuAppID != "" {
 		feishu = "已配置(app_id=" + c.FeishuAppID + ", secret=***)"
 	}
+	feishuEvent := "未配置(回调端点 404)"
+	if c.FeishuEncryptKey != "" {
+		feishuEvent = "已配置(encrypt_key=***, token=" + orDash(c.FeishuVerificationToken) + ")"
+	}
 	return []string{
 		"JX_DB_DSN          = " + RedactDSN(c.DBDSN),
 		"JX_DEV_MODE        = " + fmt.Sprintf("%v", c.DevMode),
 		"JX_DEV_OPEN_ID     = " + orDash(c.DevOpenID),
 		"JX_FEISHU          = " + feishu,
+		"JX_FEISHU_EVENT    = " + feishuEvent,
 		"JX_SESSION_TTL     = " + c.SessionTTL.String(),
 		"JX_BOOTSTRAP_ADMIN = " + orDash(c.BootstrapSysAdminOpenID),
 		"JX_HTTP_ADDR       = " + c.HTTPAddr,
