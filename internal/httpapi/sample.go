@@ -9,10 +9,16 @@ package httpapi
 // 权限点 → 入口：
 //	sample.take                   扫码取样（POST）· 建取样组（POST）· 样品/组/目标查询（GET，READ 级）
 //	sample.retain.in              留样入库（POST）· 留样记录与到期检索（GET，READ 级）
+//	                              · 销毁记录列表（GET /destroy，READ 级 —— N-021：销毁记录属留样域读，
+//	                                与留样记录列表同口径；★ 不得挂 destroy.init/approve 动作型点）
 //	sample.retain.lend            借出 / 归还（POST）· 借还记录（GET，READ 级）
-//	sample.retain.destroy.init    销毁发起（POST，**INIT 级**）
+//	sample.retain.destroy.init    销毁发起（POST，**INIT 级** —— 只守动作，不守任何 GET）
 //	sample.retain.destroy.approve 销毁审批（POST，**APPROVE 级** —— 不得用 ALL，
 //	                                否则 qc 的 NONE 会被语义绕过；见任务包 §6-11 / A12）
+//
+// ★★ 读入口通用规矩（N-021 教训）：GET 守卫挂的权限点必须**存在可授予的读级别**
+//	（其 levels 含 READ 或 ALL）。INIT/APPROVE 型点守 GET ⇒ Allows("READ") 恒 false
+//	⇒ 全仓任何人都 403。全仓逐条核对由 TestN021_RouteTableGetReadAudit 钉住（路由表驱动）。
 
 import (
 	"errors"
@@ -68,8 +74,10 @@ func (s *Server) mountSampling(e *echo.Echo) {
 		access.RequirePerm(s.Store, permission.SampleRetainDestroyInit, access.LevelInit))
 	g.POST("/destroy/approve", s.handleDestroyApprove,
 		access.RequirePerm(s.Store, permission.SampleRetainDestroyApprove, access.LevelApprove))
+	// ★ N-021 修复：销毁**记录列表**是读入口，改挂 sample.retain.in 的 READ
+	//	（原先挂 sample.retain.destroy.init + READ ⇒ 该点 levels 无 READ ⇒ 恒 403）。
 	g.GET("/destroy", s.handleListDestroys,
-		access.RequirePerm(s.Store, permission.SampleRetainDestroyInit, access.LevelRead))
+		access.RequirePerm(s.Store, permission.SampleRetainIn, access.LevelRead))
 
 	// —— 前端按权限显隐用的「我的取样权限摘要」（登录即可，无新增权限点）——
 	g.GET("/perm-summary", s.handlePermSummary, access.RequireLogin())
