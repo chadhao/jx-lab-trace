@@ -1651,6 +1651,18 @@
 - **状态**：OPEN
 - **最后更新**：2026-10-12 18:55
 
+### N-021 · 缺陷：销毁记录列表守卫挂错权限点 ⇒ 任何角色均 403
+
+- **提出方**：WorkBuddy（用户联调实测驱动）
+- **类型**：技术方案
+- **责任域**：mimo
+- **背景**：用户（management＋sysadmin 双角色）与纯 sysadmin 账号实测，`GET /api/sample/destroy`（含 `?pending=1`）均 **403**，响应体 `point=sample.retain.destroy.init, need=READ`。★ 根因：**该列表守卫挂了动作型权限点 `sample.retain.destroy.init`（级别体系＝INIT/APPROVE）却要求 READ 级别** ⇒ `Allows("READ")` 恒 false ⇒ **任何角色（含全授权 sysadmin）都 403**，列表对所有人不可用。★ 佐证：用户矩阵截图（sysadmin 列该点＝INIT）＋服务器双账号实测＋用户 F12 响应体。
+- **我方立场**：改挂**语义正确的既有权限点**：推荐 **`sample.retain.in` ＋ LevelRead**（销毁记录属留样域读，与「留样记录」列表同口径）；★ **不新增权限点**；★ **destroy/init / destroy/approve 两个动作 POST 的守卫不动**。★ 顺带核查 `/api/sample` 组其他 GET 挂点语义（发现同类错挂一并修并列清单）；★ **全仓同类错挂核查不得用源码 grep 拼接串方式**（本次接口清单即因此漏了拼接 URL，应从路由注册表逐一核对）。
+- **建议方案**：任务包 **`MIMO-NEXT-FIX-05.md`**（D1 改挂点 · D2 五条测试含回归 · D5 部署实测）。
+- **制度影响面**：零——仅一个 GET 守卫的挂点；不改 `spec/`、不新增权限点。
+- **状态**：OPEN
+- **最后更新**：2026-10-13 12:10
+
 ## 5. 已决议
 
 **`N-001` · 批 1（M0 地基）实现 —— `AGREED`（2026-10-09 02:38）**
