@@ -146,6 +146,23 @@ func (s *Server) handleListUserRoles(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{"count": len(all), "bindings": all})
 }
 
+// handleListUsers N-022 D2：列出**全部账号**（含无角色账号）——「绑定角色」选择器的数据源。
+// ★ 此前该路径没有真实路由 ⇒ 被 SPA 兜底吃掉返回 HTML（N-022 实测）。
+//
+// ★ 权限点（51 点冻结，不新增）：sys.user.manage + LevelRead —— 与同域读入口
+//
+//	GET /api/admin/user-roles 同点同级（读的都是账号与绑定视图；写入口才是 LevelAll）。
+func (s *Server) handleListUsers(c echo.Context) error {
+	users, err := s.Store.ListAllAccounts(c.Request().Context())
+	if err != nil {
+		return mdErr(err)
+	}
+	if users == nil {
+		users = []store.UserAccount{}
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{"count": len(users), "users": users})
+}
+
 func (s *Server) handleGetUserRoles(c echo.Context) error {
 	roles, err := s.Store.ListUserRoles(c.Request().Context(), c.Param("open_id"))
 	if err != nil {

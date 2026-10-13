@@ -93,6 +93,10 @@ func (s *Server) Handler() *echo.Echo {
 		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelAll))
 	admin.GET("/user-roles", s.handleListUserRoles,
 		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelRead))
+	// ★ N-022 D2 账号列表（绑定角色选择器数据源）：复用 sys.user.manage（同域，
+	//   与 GET /user-roles 同点同级，只读；★ 不新增权限点，51 点冻结）。
+	admin.GET("/users", s.handleListUsers,
+		access.RequirePerm(s.Store, permission.SysUserManage, access.LevelRead))
 	// ★ D3.2 飞书组织同步（手动）：复用 sys.user.manage（账号域，不新增权限点）。
 	//   只 upsert m_user，不删除、不绑角色。
 	admin.POST("/org/sync", s.handleOrgSync,

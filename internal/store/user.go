@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 )
 
 // EnsureUser 保证 m_user 有该 open_id 的行（飞书免登首次进入 / dev 桩共用）。
@@ -127,6 +128,66 @@ func (s *Store) DisableUser(ctx context.Context, openID, by string) (string, err
 		return "", fmt.Errorf("停用用户失败: %w", err)
 	}
 	return old, nil
+}
+
+// UserAccount 是 GET /api/admin/users 返回的一行（N-022 D2）。
+type UserAccount struct {
+	OpenID string   `json:"open_id"`
+	Name   string   `json:"name"`
+	Status string   `json:"status"`
+	Roles  []string `json:"roles"` // 已绑角色（可叠加）；无角色账号 = 空数组
+}
+
+// ListAllAccounts 列出**全部** m_user 账号及其绑定角色。
+//
+// ★ 与 ListUserBindings 的区别（N-022 D2 的灵魂）：绑定视图以 s_user_role 为驱动表
+//
+//	⇒ **没绑过角色的账号根本不会出现**；本函数以 m_user 为驱动表 ⇒ 无角色账号也在列
+//	（管理员要绑的恰恰是他们）。
+//
+// ★ 顺序：**未绑角色的排前面**（管理员最常绑的就是他们），同组内按 open_id。
+func (s *Store) ListAllAccounts(ctx context.Context) ([]UserAccount, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT u.open_id, u.name, u.status, IFNULL(ur.role_code, '')
+		  FROM m_user u
+		  LEFT JOIN s_user_role ur ON ur.open_id = u.open_id
+		 ORDER BY u.open_id, ur.role_code`)
+	if err != nil {
+		return nil, fmt.Errorf("查询账号列表失败: %w", err)
+	}
+	defer rows.Close()
+	byID := map[string]*UserAccount{}
+	var order []string
+	for rows.Next() {
+		var openID, name, status, role string
+		if err := rows.Scan(&openID, &name, &status, &role); err != nil {
+			return nil, err
+		}
+		acc, ok := byID[openID]
+		if !ok {
+			acc = &UserAccount{OpenID: openID, Name: name, Status: status, Roles: []string{}}
+			byID[openID] = acc
+			order = append(order, openID)
+		}
+		if role != "" {
+			acc.Roles = append(acc.Roles, role)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]UserAccount, 0, len(order))
+	for _, id := range order {
+		out = append(out, *byID[id])
+	}
+	sort.Slice(out, func(i, j int) bool {
+		iFree, jFree := len(out[i].Roles) == 0, len(out[j].Roles) == 0
+		if iFree != jFree {
+			return iFree // 未绑角色的在前
+		}
+		return out[i].OpenID < out[j].OpenID
+	})
+	return out, nil
 }
 
 // RevokeUserSessions 立即失效该用户**全部活跃会话**（离职安全要求：在线会话当场作废）。
