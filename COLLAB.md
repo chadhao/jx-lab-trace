@@ -1660,8 +1660,52 @@
 - **我方立场**：改挂**语义正确的既有权限点**：推荐 **`sample.retain.in` ＋ LevelRead**（销毁记录属留样域读，与「留样记录」列表同口径）；★ **不新增权限点**；★ **destroy/init / destroy/approve 两个动作 POST 的守卫不动**。★ 顺带核查 `/api/sample` 组其他 GET 挂点语义（发现同类错挂一并修并列清单）；★ **全仓同类错挂核查不得用源码 grep 拼接串方式**（本次接口清单即因此漏了拼接 URL，应从路由注册表逐一核对）。
 - **建议方案**：任务包 **`MIMO-NEXT-FIX-05.md`**（D1 改挂点 · D2 五条测试含回归 · D5 部署实测）。
 - **制度影响面**：零——仅一个 GET 守卫的挂点；不改 `spec/`、不新增权限点。
-- **状态**：OPEN
-- **最后更新**：2026-10-13 12:10
+
+**★★ mimo 回执 · 2026-10-13 12:31 · `MIMO-NEXT-FIX-05` 交付完毕（D1 改挂点 + 全仓路由表审计 · D2 两条测试 · D5 门禁/部署/实测）；状态改 `MIMO-DONE`**
+
+★ 本段为 `N-021` 段内**局部追加**，未整体重写 `COLLAB.md`（`check_collab.py` / `check_collab_anchors.py` / `check_md_tables.py` 均绿）。
+
+**1. D1 修复（`internal/httpapi/sample.go`）**
+
+- ★ `GET /api/sample/destroy` 守卫由 `RequirePerm(sample.retain.destroy.init, LevelRead)` 改为 **`RequirePerm(sample.retain.in, LevelRead)`**（`internal/httpapi/sample.go` 的 mountSampling）。
+- ★ **语义理由**：销毁记录（`b_sample_destroy`）挂在留样（`b_sample_retention`）之下，读销毁记录＝**留样域的读**，与 `GET /api/sample/retention`（留样记录列表，同为 `sample.retain.in` + READ）同口径；而 `sample.retain.destroy.init`（levels=INIT/NONE）与 `destroy.approve`（APPROVE/NONE）是**动作型点**，只能守「发起 / 审批」两个 POST。★ **未新增权限点**（51 点冻结）；★ `destroy/init` 与 `destroy/approve` 两个动作 POST 的守卫**一字未动**。
+- ★ **同组路由核查**（`/api/sample` 组 GET 逐条，从路由表读）：`samples` / `groups` / `groups/:id/members` / `targets` → `sample.take` + READ（该点 levels=ALL,NONE ⇒ 持 ALL 即满足 READ，可达，**非**本类错挂）；`retention` → `sample.retain.in` + READ ✓；`lend` → `sample.retain.lend` + READ（levels 含 READ）✓。⇒ **组内无第二处同类错挂**。
+- ★★ **全仓同类错挂核查（路由表驱动，非源码 grep 拼串）**：新增 `TestTC_N021_02_路由表GET读入口审计`（`internal/httpapi/n021_test.go`）——从 **echo Route 表**（与线上装配同一张表）取全部 `GET /api/*`，用「**每点最高可授予级别**」的角色（ALL > READ > INIT > APPROVE，按 `s_permission_point.levels` 生成）逐一请求，凡响应体带 `point` 的 403 即判红。结果：**77 条 GET 全部可达、0 命中**（覆盖 `server/admin` 与 md / recv / sample / insp / prod / ship / trace / report / rpt 共 10 个 mount 组）。★ 同时确认 §6-2：全仓**没有**动作型点（INIT/APPROVE-only）守 GET 的残留。
+- ★ **变异取证（判据法自证测试有效）**：把挂点临时还原成旧代码后只跑两条 N-021 用例 ⇒ **双 FAIL**（① 全授权账号 `GET /api/sample/destroy` 仍 403 `point=sample.retain.destroy.init`；② 路由表审计精确点名 `/api/sample/destroy`）；还原后双 PASS。
+
+**2. D2 测试（`internal/httpapi/n021_test.go`，服务器 `JX_TEST_DB=1` 真跑）**
+
+1. ★ **回归**：全授权账号（「每点最高级别」角色构造）⇒ `GET /api/sample/destroy` 与 `?pending=1` 均 **200**（含 `count` 字段）。
+2. ★ **无相关授权账号**（`sales` 角色 / 无授权探针角色）⇒ **403**，响应体 `point=sample.retain.in`、`need=READ`（deny by default 不变）。
+3. ★ **未登录** ⇒ **401**。
+4. ★ **动作 POST 守卫不变**：仅持 `sample.retain.in=ALL` 的账号 ⇒ `POST /destroy/init` **403**（`point=destroy.init`、`need=INIT`）、`POST /destroy/approve` **403**（`point=destroy.approve`、`need=APPROVE`）；同一账号 `GET /destroy` ⇒ 200（**读放宽 ≠ 动作放宽**）。
+5. ★ **既有测试全绿**：服务器全套 TC（`bash scripts/run_tc_server.sh`，7 包 `JX_TEST_DB=1`）＝ **330 PASS / 0 FAIL / 0 SKIP**（httpapi 110 → **112**，新增 2 条）。
+
+**3. D5 门禁 / 部署 / curl 实测**
+
+- 门禁：`bash scripts/check_all.sh` ⇒ **必绿 11/11 全绿**，会报 2 项无命中，exit 0。
+- 部署：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ 新 PID **282027**；`/healthz` 200、`version=8678511`（= 已提交 commit，**非 -dirty**）、`dev=true`。★ 部署前先把服务器 `.env` **逐字节同步回本地 `.env.deploy`**（md5 一致 `22c81fb8…`，含 `JX_FEISHU_APP_ID/SECRET` 两行）——因 deploy 脚本仍会用 `.env.deploy` 覆盖服务器 `.env`（N-020 遗留路径，本单不改脚本）；部署后启动日志 `JX_FEISHU = 已配置`、`/api/auth/feishu/start` **302**、服务器 `.env` md5 不变。
+- ★ **curl 实测（测试服务器 127.0.0.1:18080；探针 `_probe/n021_destroy_probe.sh`，20/20 PASS；探针账号经管理 API 构造、收尾已删除）**：
+
+| 用例 | 修复前（同服务器同账号） | 修复后（8678511） |
+| --- | --- | --- |
+| 全授权账号 `GET /api/sample/destroy` | **403** `point=sample.retain.destroy.init, need=READ`（根因复现） | **200** |
+| 全授权账号 `GET /api/sample/destroy?pending=1` | **403** 同上 | **200** |
+| 无相关授权账号 | 403 `point=sample.retain.destroy.init` | **403** `point=sample.retain.in, need=READ`（新挂点可见） |
+| 未登录 | 401 | 401 |
+| `POST /destroy/init`（仅 `retain.in=ALL` 账号） | 403 `need=INIT` | 403 `need=INIT`（不变） |
+| `POST /destroy/approve`（同上账号） | 403 `need=APPROVE` | 403 `need=APPROVE`（不变） |
+
+- 提交：**显式路径、只本地提交**（代码＋测试 `8678511`，本回执另行一提），**不 push**。
+
+★ **如实声明的未做项 / 需用户知悉**
+
+1. ★ **仅有 `management` 角色的账号读销毁列表仍 403** —— `management` 在 `sample.retain.in` 上为 `NONE`（种子与现网矩阵均是；该点 levels=ALL,NONE，**没有 READ 可授**）。这与该角色读 `GET /api/sample/retention` 的现状一致（留样域读本就未授给 management）。★ 用户实测的双角色账号含 `sysadmin`（现网 `sysadmin × sample.retain.in = ALL`）⇒ **200 已实测通过**。若需让纯 management 账号在审批 UI 看到待审列表（下拉依赖本接口），属**授权配置**事项：在权限矩阵给 management 授 `sample.retain.in = ALL`（会连带留样入库**写**权，是否授予请用户定夺）；本单不改 spec/种子（冻结）。
+2. **`deploy-test-server.sh` 仍会用本地 `.env.deploy` 覆盖服务器 `.env`** —— N-020 的根因路径未除（N-020 单独立案，不在本单范围）；本单只做了「部署前把服务器 `.env` 同步回本地」的规避并部署后核对 md5。
+3. 探针临时角色 `tr_n021_probe` / `tr_n021_none` 已经管理 API 删除；库内审计留有 reason=`N-021 验收探针` 的建/删记录，属预期留痕。
+
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-13 12:31
 
 ## 5. 已决议
 
