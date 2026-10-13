@@ -1716,8 +1716,61 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-06.md`**：**D1** 权限配置页「同步飞书组织」按钮（同步期禁用、人话统计、失败语义）；**D2** 新增 `GET /api/admin/users` 真实端点（列全部 `s_user` 含无角色账号）＋ **绑定角色改下拉选择**（按姓名/ID 过滤、未绑角色排前、保留手填兜底）。★ 不新增权限点。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`；只本地提交不 push。
 - **制度影响面**：零——前端 UI ＋ 一个管理域只读端点；不改 `spec/`。
-- **状态**：OPEN
-- **最后更新**：2026-10-13 13:45
+
+**★★ mimo 回执 · 2026-10-13 14:18 · `MIMO-NEXT-FIX-06` 交付完毕（D1 同步按钮 · D2 账号列表端点＋账号选择器 · D3 测试 · D5 门禁/部署/curl 实测）；状态改 `MIMO-DONE`**
+
+★ 本段为 `N-022` 段内**局部追加**，未整体重写 `COLLAB.md`（`check_collab.py` / `check_collab_anchors.py` / `check_md_tables.py` 均绿）。
+
+**1. D1 同步飞书组织按钮（`web/src/components/PermissionAdmin.vue`）**
+
+- ★ 位置：权限配置页「用户绑定」子页签**顶部 toolbar**（与绑角色动作同域）；点击 ⇒ `POST /api/admin/org/sync`。
+- ★ 完成后页内 `ok` **人话统计**：`同步完成：{total_depts} 个部门 / {total_users} 个用户，新建 {created}、更新 {updated}、停用 {deleted}`（取接口返回值渲染，非写死；本次实测渲染＝6 个部门 / 5 个用户，新建 0、更新 0、停用 0）。
+- ★ 同步期间按钮**禁用**（文案「同步中…（约数秒，请勿重复点击）」，`finally` 复位防重复提交）；完成/失败走页内 `ok` / `err`。
+- ★ 失败展示：**403 ⇒「没有同步飞书组织的权限，请联系管理员」**；**5xx ⇒ 原样展示后端 message**。
+- ★ **角色下拉联动**：成功后 `Promise.all([loadUsers, loadBindings, loadRoles])` ⇒ 新账号立即可选。
+- `bash scripts/build.sh` 重建 dist 并入库（`index-DNRf_xrs.js` / `index-DKrfqbnp.css`）。
+
+**2. D2 账号列表端点 ＋ 绑定角色改「从列表选人」**
+
+- ★ 新增 **`GET /api/admin/users`**（`server.go` 路由 ＋ `admin.go` 的 `handleListUsers` ＋ `store.ListAllAccounts`）：
+  - 驱动表 **`m_user`** LEFT JOIN `s_user_role` ⇒ **无角色账号也在列** —— 既有 `GET /api/admin/user-roles` 以 `s_user_role` 为驱动表，**没绑过角色的账号根本查不到**，而管理员要绑的恰恰是他们（N-022 灵魂）；每行 `open_id / name / status / roles[]`（无角色＝空数组）。
+  - ★ **列表顺序：未绑角色的排前面**（组内按 open_id），服务端排好，前端只过滤不重排。
+  - ★ **表名口径**：任务包行文写 `s_user`；机读件 `spec/schema.sql` 账号表是 **`m_user`** ⇒ 以机读件为准（N-002 判例），**未改 schema**。
+  - ★ **权限点（复用，不新增，51 点冻结）：`sys.user.manage` + LevelRead**。选择理由：读对象是账号与绑定视图，与同域读入口 `GET /api/admin/user-roles` **同点同级**（该点 levels=ALL/NONE ⇒ 持 ALL 即满足 READ，sysadmin 可达，N-021 路由表 GET 审计复证可达）；写入口（绑定/同步）才是 LevelAll；`sys.audit.view` 只读审计、`sys.perm.edit` 管权限字典、`sys.param.edit` 管参数，均不贴题（与 N-018 同步接口选点理由同源）。
+- ★ 前端 `open_id` 手填框改**账号选择器**（可输入组合框）：数据源 = 该端点（`onMounted` 拉取）；**按姓名/open_id 过滤**（输入即过滤、保持服务端顺序）；**已绑角色标注**（`roles` 显 tag，无角色显「未绑角色」）；★ **保留手填兜底**（输入非列表值时允许，兼容事件同步晚于列表拉取的时序）；绑定/解绑成功后同步刷新列表标注。样式入 `web/src/style.css`（`.combo` / `.acct-list`，沿用本仓「全局样式、无 scoped」惯例）。
+
+**3. D3 测试（服务器 `JX_TEST_DB=1` 真跑）**
+
+1. ★ `TestTC_N022_01_账号列表形状与无角色账号`（`internal/httpapi/n022_test.go`）：200 ＋ `count == len(users)` ＋ 每行 `open_id/name/status/roles` 齐全；**无角色账号在列且 `roles=[]`（灵魂断言）**；已绑账号标注现有角色；**未绑在前**（全局顺序断言：一旦出现已绑行，其后不得再有无角色行）。
+2. ★ `TestTC_N022_02_账号列表权限`：**未登录 ⇒ 401**；`sales`（`sys.user.manage=NONE`）⇒ **403 且响应体 `point=sys.user.manage`**（复用挂点可审计）。
+3. ★ 既有测试全绿：服务器全套 TC（`bash scripts/run_tc_server.sh`，7 包）＝ **332 PASS / 0 FAIL / 0 SKIP**（httpapi 112 → **114**，恰增 2 条；另以 `-test.run N022` 单跑复证双 PASS）。
+4. ★ 前端 `bash scripts/build.sh`（vite build）成功、dist 重嵌入库；门禁 `bash scripts/check_all.sh` ⇒ **必绿 11/11**，会报 2 项无命中，exit 0。
+
+**4. D5 部署与 curl 实测**
+
+- 部署：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ 新 PID **286764**；`/healthz` 200 且 **`version=811b914` == HEAD、非 -dirty**；`dev=true`；主服务与 reportd 均只绑回环。
+- ★★ **`.env` 守护（N-020 教训）**：部署前服务器 `.env` 与本地 `.env.deploy` **md5 逐字节一致**（`22c81fb88b2776d36a309caaa3991567`，15 键含 `JX_FEISHU_APP_ID/SECRET`）⇒ 脚本的覆盖上传为**同内容替换**；部署后服务器 `.env` **md5 不变、行数不变（31 行）** —— 部署链路未创建/修改/删除任何行。
+- ★ curl 实测（测试服务器 `127.0.0.1:18080`）：
+
+| 用例 | 结果 |
+| --- | --- |
+| 未登录 `GET /api/admin/users` | **401** `content-type=application/json`（该路径不再是 SPA 兜底 HTML） |
+| 登录后 `GET /api/admin/users` | **200** JSON，`count=13`：**5 个真实飞书账号与姓名**（胡锦 / 刘纯 / 高帅 / 刘川 / 郝端）＋ 8 个测试桩账号；**未绑 6 行排前（`roles=[]`）、已绑 7 行在后且标注角色**（如郝端 → `management+sysadmin`） |
+| `POST /api/admin/org/sync` 幂等复跑 | 200，**`created=0`**、`updated=0`、`skipped=5`、`total_depts=6`、`total_users=5`、`deleted=0`、`roles_touched=false`，耗时 4.25s |
+| 复跑后再 `GET /api/admin/users` | 200，`count=13` 不变（同步只 upsert，未增删行） |
+| 部署产物含新前端 | `index-DNRf_xrs.js` 命中「同步飞书组织 / api/admin/users / 未绑角色 / 同步中」；`index-DKrfqbnp.css` 命中 `acct-list` |
+
+- 提交：**显式路径、只本地提交**（`d420f2f` D2 后端＋测试 · `811b914` D1 前端＋dist · 本回执另行一提），**不 push**。
+
+★ **如实声明的未做项 / 需用户知悉**
+
+1. ★ **幂等复跑实测 `updated=0, skipped=5`，与任务包预期的 `updated=5` 不同** —— 2026-10-13 首次同步已把 5 人姓名写对，本次姓名未变 ⇒ 按 `store.UpsertUser` 口径计入 `Skipped`（有行且姓名未变 ⇒ 不写，这正是幂等的定义）。**任务包要求的核心断言 `created=0`（零新行）成立**；要看到 `updated>0` 须先有一轮姓名变动（如飞书侧改名）再复跑。
+2. ★ **组合框为自实现（非原生 `<datalist>`）**：为在同一输入框上同时满足「姓名/open_id 过滤 ＋ 已绑角色标注 ＋ 未绑排前」。**手填兜底保留 ⇒ 填错值仍会补建账号行**（`BindUserRole` 的 `ensureUserTx`）—— 这是任务包明确要求的兜底行为，请管理员优先在列表中点选。
+3. **真浏览器逐帧点验未做**（按 `docs/05` 本机不跑服务）：D1 按钮交互以「构建产物含标记（curl 实测）＋ 端点 curl 实测 ＋ 服务器 TC」承担；如需像素级确认，可在测试服 `dev=true` 下用浏览器走一遍 同步 → 点选 → 绑定。
+4. **`deploy-test-server.sh` 仍会用本地 `.env.deploy` 覆盖服务器 `.env`** —— N-020 根因路径未除（N-020 单独立案，不在本单范围）；本单沿用 N-021 做法：部署前 md5 对齐、部署后 md5 复核。
+
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-13 14:18
 
 ## 5. 已决议
 
