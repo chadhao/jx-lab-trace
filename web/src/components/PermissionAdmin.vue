@@ -126,6 +126,15 @@ async function loadBindings() {
     err.value = e.message
   }
 }
+// ★ N-022 D2：账号选择器数据源 —— 全量账号（含无角色账号，未绑的服务端已排前）。
+const accounts = ref([])
+async function loadUsers() {
+  try {
+    accounts.value = (await api.get('/api/admin/users')).users || []
+  } catch (e) {
+    err.value = e.message
+  }
+}
 async function loadAudit() {
   try {
     const d = await api.get('/api/admin/audit-log')
@@ -185,6 +194,45 @@ async function deleteRole(r) {
 
 // ---- 用户绑定 ----
 const bindForm = ref({ open_id: '', role_code: '' })
+
+// ★ N-022 D1 · 同步飞书组织（放「用户绑定」顶部 —— 与绑动作同域）。
+const syncing = ref(false)
+async function syncOrg() {
+  if (syncing.value) return
+  syncing.value = true
+  msg.value = ''
+  err.value = ''
+  try {
+    const r = await api.post('/api/admin/org/sync')
+    msg.value = `同步完成：${r.total_depts} 个部门 / ${r.total_users} 个用户，` +
+      `新建 ${r.created}、更新 ${r.updated}、停用 ${r.deleted || 0}`
+    // ★ 角色下拉联动：同步完立即刷新账号列表，新账号马上可选。
+    await Promise.all([loadUsers(), loadBindings(), loadRoles()])
+  } catch (e) {
+    if (e.status === 403) {
+      err.value = '没有同步飞书组织的权限，请联系管理员'
+    } else {
+      err.value = e.message // 5xx ⇒ 原样展示后端 message
+    }
+  } finally {
+    syncing.value = false
+  }
+}
+
+// ★ N-022 D2 · 从列表选人：输入框既是过滤器也是值（保留手填兜底 ——
+//	输入非列表值时允许，兼容事件同步晚于列表拉取的时序）。
+const acctOpen = ref(false)
+const filteredAccounts = computed(() => {
+  const q = (bindForm.value.open_id || '').trim().toLowerCase()
+  if (!q) return accounts.value
+  return accounts.value.filter(
+    (a) => (a.name || '').toLowerCase().includes(q) || (a.open_id || '').toLowerCase().includes(q))
+})
+function pickAccount(a) {
+  bindForm.value.open_id = a.open_id
+  acctOpen.value = false
+}
+
 async function bind() {
   try {
     await api.post('/api/admin/user-roles', {
@@ -193,7 +241,7 @@ async function bind() {
       reason: '后台绑定角色',
     })
     msg.value = '已绑定（一个账号可叠加多个角色）'
-    await Promise.all([loadBindings(), loadRoles()])
+    await Promise.all([loadBindings(), loadRoles(), loadUsers()])
   } catch (e) {
     err.value = e.message
   }
@@ -201,7 +249,7 @@ async function bind() {
 async function unbind(openID, role) {
   try {
     await api.del(`/api/admin/user-roles/${encodeURIComponent(openID)}/${role}`)
-    await Promise.all([loadBindings(), loadRoles()])
+    await Promise.all([loadBindings(), loadRoles(), loadUsers()])
   } catch (e) {
     err.value = e.message
   }
@@ -209,7 +257,7 @@ async function unbind(openID, role) {
 
 onMounted(async () => {
   await loadMatrix()
-  await Promise.all([loadRoles(), loadBindings(), loadAudit()])
+  await Promise.all([loadRoles(), loadBindings(), loadAudit(), loadUsers()])
 })
 </script>
 
@@ -321,10 +369,31 @@ onMounted(async () => {
 
     <!-- ===== 用户绑定 ===== -->
     <template v-else-if="tab === 'users'">
+      <!-- ★ N-022 D1 · 同步飞书组织：与绑角色动作同域；同步期禁用防重复点击 -->
+      <div class="toolbar">
+        <button :disabled="syncing" @click="syncOrg">
+          {{ syncing ? '同步中…（约数秒，请勿重复点击）' : '同步飞书组织' }}
+        </button>
+        <span class="hint">从飞书拉取部门与人员：只新建/更新账号，不自动绑角色；完成后下方选人列表立即刷新</span>
+      </div>
+
       <div class="panel">
         <div class="panel-head"><b>绑定角色</b></div>
         <div class="form">
-          <label><span>open_id*</span><input v-model="bindForm.open_id" placeholder="飞书 open_id" /></label>
+          <label class="combo">
+            <span>账号*</span>
+            <input v-model.trim="bindForm.open_id" placeholder="输入姓名/open_id 过滤后点选；也可直接手填"
+                   autocomplete="off"
+                   @focus="acctOpen = true" @input="acctOpen = true" @blur="acctOpen = false" />
+            <ul v-if="acctOpen && filteredAccounts.length" class="acct-list">
+              <li v-for="a in filteredAccounts" :key="a.open_id" @mousedown.prevent="pickAccount(a)">
+                <b>{{ a.name }}</b>
+                <code>{{ a.open_id }}</code>
+                <span v-if="a.roles && a.roles.length" class="tag">{{ a.roles.join(' + ') }}</span>
+                <span v-else class="hint">未绑角色</span>
+              </li>
+            </ul>
+          </label>
           <label>
             <span>角色*</span>
             <select v-model="bindForm.role_code">
@@ -334,7 +403,7 @@ onMounted(async () => {
           </label>
           <div class="full">
             <button :disabled="!bindForm.open_id || !bindForm.role_code" @click="bind">绑定</button>
-            <span class="hint">同一账号可叠加多个角色，权限取并集</span>
+            <span class="hint">同一账号可叠加多个角色，权限取并集；列表外的手填值也允许（兜底）</span>
           </div>
         </div>
       </div>
