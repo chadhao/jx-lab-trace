@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -48,6 +49,7 @@ func m5SWipe(t *testing.T, st *Store) {
 	q(`DELETE FROM b_bag WHERE created_by = ?`, me)
 	q(`DELETE FROM b_truck_lot WHERE created_by = ?`, me)
 	q(`DELETE FROM b_arrival_notice WHERE created_by = ?`, me)
+	q(`DELETE FROM m_incoming_batch WHERE created_by = ?`, m5StoreOpenID)
 	q(`DELETE FROM b_label_print WHERE created_by = ?`, me)
 	q(`DELETE FROM s_audit_log WHERE actor_open_id = ?`, me)
 	q(`DELETE FROM m_test_item_limit WHERE created_by = ?`, me)
@@ -107,12 +109,19 @@ func m5SActor() MDActor {
 }
 
 // m5STruckWithBags 走批 3 真实链路造车 + 袋（同 m4 手法，用本批账号）。
+// ★ N-023：先预填批次再报车次（每次调用一个新批次）。
 func m5STruckWithBags(t *testing.T, st *Store, custID, matID int64, bags int) (TruckLot, []Bag) {
 	t.Helper()
 	ctx := context.Background()
+	b, err := st.CreateBatch(ctx, BatchInput{
+		CustomerID: custID, MaterialID: matID,
+		CustomerBatchNo: fmt.Sprintf("M5S-%d", time.Now().UnixNano()),
+	}, m5SActor())
+	if err != nil {
+		t.Fatalf("预填批次失败: %v", err)
+	}
 	n, err := st.CreateNotice(ctx, NoticeInput{
-		CustomerID: custID, MaterialID: matID, BizType: BizTypeCG,
-		ArriveDate: m5SDate, EstBagCount: bags, PlateNo: "湘F·M5",
+		BatchID: b.ID, PlateNo: "湘F·M5",
 	}, m5SActor())
 	if err != nil {
 		t.Fatalf("登记预报失败: %v", err)

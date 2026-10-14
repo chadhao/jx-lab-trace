@@ -58,6 +58,8 @@ func m3HTTPWipe(t *testing.T, st *store.Store) {
 	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m3HTTPCustCode)
 	q(`DELETE FROM b_arrival_notice WHERE created_by = ?
 	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m3HTTPCustCode)
+	q(`DELETE FROM m_incoming_batch WHERE created_by = ?
+	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m3HTTPCustCode)
 	q(`DELETE FROM b_label_print WHERE created_by = ?`, me)
 
 	q(`DELETE FROM m_customer WHERE code = ? AND created_by LIKE 'ou\_test\_%'`, m3HTTPCustCode)
@@ -132,20 +134,35 @@ func (e *env) doRaw(method, path, cookie, body string) (*http.Response, string) 
 	return resp, string(raw)
 }
 
-// m3NoticeBody 造预报请求体。
-func m3NoticeBody(custID, matID int64, est int) string {
+// m3CreateBatch 经接口预填一个来料批次，返回 batch_id。
+// customer_batch_no 用纳秒后缀 ⇒ 同客户同产品重复预填不撞三元组（可重复执行）。
+func m3CreateBatch(t *testing.T, e *env, ck string, custID, matID int64) int64 {
+	t.Helper()
+	body, _ := json.Marshal(map[string]interface{}{
+		"customer_id": custID, "material_id": matID,
+		"customer_batch_no": fmt.Sprintf("M3-%d", time.Now().UnixNano()),
+	})
+	resp, out := e.do("POST", "/api/recv/batches", ck, string(body))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("预填批次应 200，实际 %d body=%v", resp.StatusCode, out)
+	}
+	row, _ := out["row"].(map[string]interface{})
+	return int64(numOf(row["id"]))
+}
+
+// m3NoticeBody 造车次预报表单体（N-023：只选批次 + 车辆信息）。
+func m3NoticeBody(batchID int64) string {
 	b, _ := json.Marshal(map[string]interface{}{
-		"customer_id": custID, "material_id": matID, "biz_type": "CG",
-		"arrive_date": m3HTTPDate, "plate_no": "湘F·M3", "driver": "司机乙",
-		"est_bag_count": est,
+		"batch_id": batchID, "plate_no": "湘F·M3", "driver": "司机乙",
 	})
 	return string(b)
 }
 
-// m3ArriveViaHTTP 走接口完成「预报 → 到货确认」，返回车次行。
-func m3ArriveViaHTTP(t *testing.T, e *env, ck string, custID, matID int64, est int) map[string]interface{} {
+// m3ArriveViaHTTP 走接口完成「预填批次 → 车次预报 → 到货确认」，返回车次行。
+func m3ArriveViaHTTP(t *testing.T, e *env, ck string, custID, matID int64) map[string]interface{} {
 	t.Helper()
-	resp, body := e.do("POST", "/api/recv/notices", ck, m3NoticeBody(custID, matID, est))
+	batchID := m3CreateBatch(t, e, ck, custID, matID)
+	resp, body := e.do("POST", "/api/recv/notices", ck, m3NoticeBody(batchID))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("预报登记应 200，实际 %d body=%v", resp.StatusCode, body)
 	}
@@ -184,13 +201,14 @@ func m3WeighAndBags(t *testing.T, e *env, ck string, truckID int64, gross, tare 
 	return out
 }
 
-// TC-M3-07 边界：无预报直接到货 ⇒ 补录 + 立即确认成功，车序照常分配。
+// TC-M3-07 边界：无预报直接到货 ⇒ 补录 + 立即确认成功，车序照常分配（批次内）。
 func TestTC_M3_07_DirectArrivalWithoutNotice(t *testing.T) {
 	e, ck := m3HTTPEnv(t)
 	cust, mat := m3MasterIDs(t, e.st)
+	batchID := m3CreateBatch(t, e, ck, cust, mat)
 
 	body := fmt.Sprintf(`{"notice": %s, "remark": "现场临时派车"}`,
-		m3NoticeBody(cust, mat, 0))
+		m3NoticeBody(batchID))
 	resp, out := e.do("POST", "/api/recv/arrivals", ck, body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("无预报直接到货应 200，实际 %d body=%v", resp.StatusCode, out)
@@ -209,20 +227,23 @@ func TestTC_M3_07_DirectArrivalWithoutNotice(t *testing.T) {
 	if truck["status"] != "待检" {
 		t.Fatalf("车次状态应「待检」，实际 %v", truck["status"])
 	}
-	if truck["arrive_date"] != m3HTTPDate {
-		t.Fatalf("链根日期应 %s，实际 %v", m3HTTPDate, truck["arrive_date"])
+	// ★ N-023：链根日期由到货确认写入 ⇒ 值为确认日（今天）
+	if truck["arrive_date"] != time.Now().Format("2006-01-02") {
+		t.Fatalf("链根日期应为确认日 %s，实际 %v", time.Now().Format("2006-01-02"), truck["arrive_date"])
 	}
 	if truck["human"] == "" || !strings.Contains(fmt.Sprint(truck["human"]), "-") {
 		t.Fatalf("应返回人读行 human，实际 %v", truck["human"])
 	}
 }
 
-// TC-M3-08 边界：改预报车牌 ⇒ **车序不变**（forecast_edit_changes_vehicle_seq = false）。
+// TC-M3-08 边界：改预报车牌 ⇒ **车序不变**（forecast_edit_changes_vehicle_seq = false）；
+// ★ N-023：est_bag_count/arrive_date 输入被拒（字段已删）。
 func TestTC_M3_08_EditNoticeKeepsVehicleSeq(t *testing.T) {
 	e, ck := m3HTTPEnv(t)
 	cust, mat := m3MasterIDs(t, e.st)
+	batchID := m3CreateBatch(t, e, ck, cust, mat)
 
-	resp, body := e.do("POST", "/api/recv/notices", ck, m3NoticeBody(cust, mat, 0))
+	resp, body := e.do("POST", "/api/recv/notices", ck, m3NoticeBody(batchID))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("预报登记应 200，实际 %d body=%v", resp.StatusCode, body)
 	}
@@ -234,7 +255,7 @@ func TestTC_M3_08_EditNoticeKeepsVehicleSeq(t *testing.T) {
 	}
 
 	resp, body = e.do("PUT", fmt.Sprintf("/api/recv/notices/%d", id), ck,
-		`{"reason":"车牌录错", "plate_no":"湘F·改", "driver":"司机丙", "est_bag_count": 25}`)
+		`{"reason":"车牌录错", "plate_no":"湘F·改", "driver":"司机丙"}`)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("改预报应 200，实际 %d body=%v", resp.StatusCode, body)
 	}
@@ -245,8 +266,15 @@ func TestTC_M3_08_EditNoticeKeepsVehicleSeq(t *testing.T) {
 	if after["plate_no"] != "湘F·改" {
 		t.Fatalf("车牌应被更新，实际 %v", after["plate_no"])
 	}
-	if numOf(after["est_bag_count"]) != 25 {
-		t.Fatalf("预计袋数应更新为 25，实际 %v", after["est_bag_count"])
+	if _, exists := after["est_bag_count"]; exists {
+		t.Fatalf("N-023 响应不应含 est_bag_count 字段: %v", after)
+	}
+
+	// ★ N-023：预估字段已删除 ⇒ 携带 est_bag_count 的修改请求被 400 拒绝
+	resp, body = e.do("PUT", fmt.Sprintf("/api/recv/notices/%d", id), ck,
+		`{"reason":"带预估", "est_bag_count": 25}`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("带 est_bag_count 的修改应 400，实际 %d body=%v", resp.StatusCode, body)
 	}
 
 	// 链根日期不允许改（车序与码绑定在该日）
@@ -261,7 +289,7 @@ func TestTC_M3_08_EditNoticeKeepsVehicleSeq(t *testing.T) {
 func TestTC_M3_11_ReprintRequiresReason(t *testing.T) {
 	e, ck := m3HTTPEnv(t)
 	cust, mat := m3MasterIDs(t, e.st)
-	truck := m3ArriveViaHTTP(t, e, ck, cust, mat, 0)
+	truck := m3ArriveViaHTTP(t, e, ck, cust, mat)
 	truckID := numOf(truck["id"])
 	bags := m3WeighAndBags(t, e, ck, truckID, "31.5", "1.5", 3)
 	if len(bags) != 3 {
@@ -346,7 +374,7 @@ func TestTC_M3_11_ReprintRequiresReason(t *testing.T) {
 func TestTC_M3_12_FedBagCannotVoid(t *testing.T) {
 	e, ck := m3HTTPEnv(t)
 	cust, mat := m3MasterIDs(t, e.st)
-	truck := m3ArriveViaHTTP(t, e, ck, cust, mat, 0)
+	truck := m3ArriveViaHTTP(t, e, ck, cust, mat)
 	truckID := numOf(truck["id"])
 	bags := m3WeighAndBags(t, e, ck, truckID, "10", "1", 2)
 	if len(bags) != 2 {
@@ -387,7 +415,7 @@ VALUES (999999, ?, 'tester', ?)`, bagID, m3HTTPOpenID); err != nil {
 func TestTC_M3_13_VoidBagsCountsValidOnly(t *testing.T) {
 	e, ck := m3HTTPEnv(t)
 	cust, mat := m3MasterIDs(t, e.st)
-	truck := m3ArriveViaHTTP(t, e, ck, cust, mat, 0)
+	truck := m3ArriveViaHTTP(t, e, ck, cust, mat)
 	truckID := numOf(truck["id"])
 	bags := m3WeighAndBags(t, e, ck, truckID, "30.5", "0.5", 10)
 	if len(bags) != 10 {
@@ -437,7 +465,7 @@ func TestTC_M3_13_VoidBagsCountsValidOnly(t *testing.T) {
 func TestTC_M3_14_ReturnTruckWithDisposition(t *testing.T) {
 	e, ck := m3HTTPEnv(t)
 	cust, mat := m3MasterIDs(t, e.st)
-	truck := m3ArriveViaHTTP(t, e, ck, cust, mat, 0)
+	truck := m3ArriveViaHTTP(t, e, ck, cust, mat)
 	truckID := numOf(truck["id"])
 	bags := m3WeighAndBags(t, e, ck, truckID, "21", "1", 5)
 
@@ -483,7 +511,7 @@ VALUES (?, '车次', ?, '不合格', '退货', ?)`,
 func TestTC_M3_15_ReturnWithoutDispositionRejected(t *testing.T) {
 	e, ck := m3HTTPEnv(t)
 	cust, mat := m3MasterIDs(t, e.st)
-	truck := m3ArriveViaHTTP(t, e, ck, cust, mat, 0)
+	truck := m3ArriveViaHTTP(t, e, ck, cust, mat)
 	truckID := numOf(truck["id"])
 	m3WeighAndBags(t, e, ck, truckID, "11", "1", 3)
 
@@ -512,8 +540,9 @@ func TestM3_FullChain_HTTP(t *testing.T) {
 	e, ck := m3HTTPEnv(t)
 	cust, mat := m3MasterIDs(t, e.st)
 
-	// ① 预报
-	resp, body := e.do("POST", "/api/recv/notices", ck, m3NoticeBody(cust, mat, 30))
+	// ① 预填批次 + 预报（N-023：批次必填；系统无预估）
+	batchID := m3CreateBatch(t, e, ck, cust, mat)
+	resp, body := e.do("POST", "/api/recv/notices", ck, m3NoticeBody(batchID))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("预报登记应 200，实际 %d body=%v", resp.StatusCode, body)
 	}

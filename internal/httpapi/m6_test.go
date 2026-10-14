@@ -149,7 +149,7 @@ func m6HBatch(t *testing.T, e *env, ck string, custID, inMatID, outMatID int64) 
 // m6HTruck 造车 + 袋（走 M3 接口链路），返回车 id 与袋行。
 func m6HTruck(t *testing.T, e *env, ck string, custID, matID int64, bags int) (int64, []map[string]interface{}) {
 	t.Helper()
-	truck := m3ArriveViaHTTP(t, e, ck, custID, matID, bags)
+	truck := m3ArriveViaHTTP(t, e, ck, custID, matID)
 	id := int64(numOf(truck["id"]))
 	return id, m3WeighAndBags(t, e, ck, id, "35000", "5000", bags)
 }

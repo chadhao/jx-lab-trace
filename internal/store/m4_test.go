@@ -11,6 +11,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,7 @@ func m4Wipe(t *testing.T, st *Store) {
 	q(`DELETE FROM b_bag WHERE created_by = ?`, me)
 	q(`DELETE FROM b_truck_lot WHERE created_by = ?`, me)
 	q(`DELETE FROM b_arrival_notice WHERE created_by = ?`, me)
+	q(`DELETE FROM m_incoming_batch WHERE created_by = ?`, me)
 	q(`DELETE FROM b_label_print WHERE created_by = ?`, me)
 	q(`DELETE FROM b_production_batch WHERE created_by = ?`, me)
 	q(`DELETE FROM b_fg_lot WHERE created_by = ?`, me)
@@ -90,12 +92,19 @@ func m4Actor() MDActor {
 }
 
 // m4TruckWithBags 造一个车次并按实际袋数生成袋码（走批 3 的真实链路），返回车次与袋。
+// ★ N-023：先预填批次再报车次（每次调用一个新批次 ⇒ 批次内车序恒 01，可重复执行）。
 func m4TruckWithBags(t *testing.T, st *Store, custID, matID int64, bags int) (TruckLot, []Bag) {
 	t.Helper()
 	ctx := context.Background()
+	b, err := st.CreateBatch(ctx, BatchInput{
+		CustomerID: custID, MaterialID: matID,
+		CustomerBatchNo: fmt.Sprintf("M4-%d", time.Now().UnixNano()),
+	}, m4Actor())
+	if err != nil {
+		t.Fatalf("预填批次失败: %v", err)
+	}
 	n, err := st.CreateNotice(ctx, NoticeInput{
-		CustomerID: custID, MaterialID: matID, BizType: BizTypeCG,
-		ArriveDate: m4Date, EstBagCount: bags, PlateNo: "湘F·M4",
+		BatchID: b.ID, PlateNo: "湘F·M4",
 	}, m4Actor())
 	if err != nil {
 		t.Fatalf("登记预报失败: %v", err)

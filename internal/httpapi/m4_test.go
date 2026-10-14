@@ -113,7 +113,7 @@ func m4HTTPMasterIDs(t *testing.T, st *store.Store) (int64, int64) {
 // m4HTTPBags 走接口造一个车次 + n 个袋码，返回袋行。
 func m4HTTPBags(t *testing.T, e *env, ck string, custID, matID int64, n int) []map[string]interface{} {
 	t.Helper()
-	truck := m3ArriveViaHTTP(t, e, ck, custID, matID, n)
+	truck := m3ArriveViaHTTP(t, e, ck, custID, matID)
 	id := int64(numOf(truck["id"]))
 	return m3WeighAndBags(t, e, ck, id, "35000", "5000", n)
 }

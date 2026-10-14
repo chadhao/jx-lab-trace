@@ -162,7 +162,7 @@ func m5ItemID(t *testing.T, st *store.Store, code string) int64 {
 // m5Truck 造一个车次（预报 → 到货 → 过磅 → 袋码），返回车次 id 与袋行。
 func m5Truck(t *testing.T, e *env, ck string, custID, matID int64) (int64, []map[string]interface{}) {
 	t.Helper()
-	truck := m3ArriveViaHTTP(t, e, ck, custID, matID, 2)
+	truck := m3ArriveViaHTTP(t, e, ck, custID, matID)
 	id := int64(numOf(truck["id"]))
 	bags := m3WeighAndBags(t, e, ck, id, "35000", "5000", 2)
 	return id, bags

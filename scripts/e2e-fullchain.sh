@@ -90,13 +90,24 @@ TITEM=$(jq rows.0.id < /tmp/e2e_ti.json)
 echo "  客户 id=$CUST(code=$CUST_CODE)  原料 id=$INMAT  成品 id=$OUTMAT  检测项 id=$TITEM"
 [ -n "$CUST" ] && [ -n "$INMAT" ] && [ -n "$OUTMAT" ] && [ -n "$TITEM" ] || { echo "  ✗ 主数据不足（客户/原料/成品/检测项），中止"; exit 1; }
 
-echo "════════ 2. 收货与打码（M3）════════"
-step "预报登记" 200 POST /api/recv/notices \
-  "{\"customer_id\":$CUST,\"material_id\":$INMAT,\"biz_type\":\"CG\",\"arrive_date\":\"2026-10-09\",\"plate_no\":\"湘F·DJ01\",\"driver\":\"联调司机\",\"est_bag_count\":2}" /tmp/e2e_n.json
+echo "════════ 2. 收货与打码（M3 · N-023 批次化）════════"
+# ★ N-023：先预填来料批次，车次预报只选批次（不再填客户/产品/到货日/预估袋数）
+step "预填来料批次" 200 POST /api/recv/batches \
+  "{\"customer_id\":$CUST,\"material_id\":$INMAT,\"customer_batch_no\":\"E2E-$(date +%s)\"}" /tmp/e2e_batch.json
+BID=$(jq row.id < /tmp/e2e_batch.json)
+echo "      → 批次 id=$BID 我方批次号=$(jq row.our_batch_no < /tmp/e2e_batch.json)"
+step "车次预报（只选批次）" 200 POST /api/recv/notices \
+  "{\"batch_id\":$BID,\"plate_no\":\"湘F·DJ01\",\"driver\":\"联调司机\"}" /tmp/e2e_n.json
 NID=$(jq row.id < /tmp/e2e_n.json)
+step "L1 未关闭批次（含统计）" 200 GET "/api/recv/batches?status=回货中" - /tmp/e2e_l1.json
+step "L2 未到货车次" 200 GET "/api/recv/notices?pending=1" - /tmp/e2e_l2.json
+step "L3 统一查询" 200 GET "/api/recv/search?customer_id=$CUST" - /tmp/e2e_l3.json
 step "到货确认" 200 POST /api/recv/arrivals "{\"notice_id\":$NID}" /tmp/e2e_t.json
 TID=$(jq row.id < /tmp/e2e_t.json)
-echo "      → 车次 id=$TID 车码=$(jq row.code < /tmp/e2e_t.json)"
+echo "      → 车次 id=$TID 车码=$(jq row.code < /tmp/e2e_t.json) 链根=$(jq row.arrive_date < /tmp/e2e_t.json)"
+step "关闭批次（幂等首关）" 200 POST "/api/recv/batches/$BID/close" - /tmp/e2e_close.json
+step "关闭后再预报 ⇒ 400" 400 POST /api/recv/notices \
+  "{\"batch_id\":$BID,\"plate_no\":\"湘F·关后\"}" /tmp/e2e_reject.json
 step "过磅（35t/5t）" 200 POST "/api/recv/trucks/$TID/weigh" '{"gross_weight":35000,"tare_weight":5000}' /tmp/e2e_w.json
 step "生成 2 个袋码" 200 POST "/api/recv/trucks/$TID/bags" '{"count":2}' /tmp/e2e_bags.json
 BAG1=$(jq rows.0.code < /tmp/e2e_bags.json)

@@ -67,6 +67,7 @@ func m6Wipe(t *testing.T, st *Store) {
 	q(`DELETE FROM b_bag WHERE created_by = ?`, me)
 	q(`DELETE FROM b_truck_lot WHERE created_by = ?`, me)
 	q(`DELETE FROM b_arrival_notice WHERE created_by = ?`, me)
+	q(`DELETE FROM m_incoming_batch WHERE created_by = ?`, me)
 
 	q(`DELETE FROM s_audit_log WHERE actor_open_id = ?`, me)
 	q(`DELETE FROM s_audit_log WHERE actor_open_id IN (?, ?)`,
@@ -128,12 +129,19 @@ func m6Batch(t *testing.T, st *Store, custID, inMatID, outMatID int64) Productio
 }
 
 // m6TruckWithBags 走批 3 真实链路造车 + 袋（本批账号）。
+// ★ N-023：先预填批次再报车次（每次调用一个新批次 ⇒ 批次内车序恒 01）。
 func m6TruckWithBags(t *testing.T, st *Store, custID, inMatID int64, bags int) (TruckLot, []Bag) {
 	t.Helper()
 	ctx := context.Background()
+	b, err := st.CreateBatch(ctx, BatchInput{
+		CustomerID: custID, MaterialID: inMatID,
+		CustomerBatchNo: fmt.Sprintf("M6-%d", time.Now().UnixNano()),
+	}, m6Actor())
+	if err != nil {
+		t.Fatalf("预填批次失败: %v", err)
+	}
 	n, err := st.CreateNotice(ctx, NoticeInput{
-		CustomerID: custID, MaterialID: inMatID, BizType: BizTypeCG,
-		ArriveDate: m6Date, EstBagCount: bags, PlateNo: "湘F·M6",
+		BatchID: b.ID, PlateNo: "湘F·M6",
 	}, m6Actor())
 	if err != nil {
 		t.Fatalf("登记预报失败: %v", err)

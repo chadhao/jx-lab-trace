@@ -26,6 +26,7 @@ const (
 // ★ 顺序硬约束：**先袋、后车**（袋码 uk_bag_code 全局唯一）——
 //
 //	只删车不删袋会留下「孤儿袋码」，下一轮生成同码袋必然 1062 撞号。
+//	N-023：批次在预报之后删（预报.batch_id 指向它）。
 //
 // ★ 范围硬约束：只删**本包账号**（ou_test_m3_store）造的行，
 //
@@ -36,13 +37,14 @@ func m3Wipe(t *testing.T, st *Store) {
 	ctx := context.Background()
 	me := m3StoreOpenID
 
-	// ① 作废记录 → ② 投料/取样外键无（本包不造）→ ③ 袋 → ④ 车 → ⑤ 预报 → ⑥ 标签
+	// ① 作废记录 → ② 投料/取样外键无（本包不造）→ ③ 袋 → ④ 车 → ⑤ 预报 → ⑥ 批次 → ⑦ 标签
 	_, _ = st.DB().ExecContext(ctx,
 		`DELETE FROM b_obj_void WHERE entity = 'b_bag'
 		   AND entity_id IN (SELECT id FROM b_bag WHERE created_by = ?)`, me)
 	_, _ = st.DB().ExecContext(ctx, `DELETE FROM b_bag WHERE created_by = ?`, me)
 	_, _ = st.DB().ExecContext(ctx, `DELETE FROM b_truck_lot WHERE created_by = ?`, me)
 	_, _ = st.DB().ExecContext(ctx, `DELETE FROM b_arrival_notice WHERE created_by = ?`, me)
+	_, _ = st.DB().ExecContext(ctx, `DELETE FROM m_incoming_batch WHERE created_by = ?`, me)
 	_, _ = st.DB().ExecContext(ctx, `DELETE FROM b_label_print WHERE created_by = ?`, me)
 
 	// 主数据（按测试编号 + 测试账号前缀兜底）
@@ -78,21 +80,29 @@ VALUES (?, 'M3测试原料', '原料', '启用', 1, 1, ?)`, m3MatCode, m3StoreOp
 	return st, custID, matID
 }
 
+// m3Batch 在 fixture 之上预填一个来料批次（N-023 车次预报的前置）。
+func m3Batch(t *testing.T, st *Store, custID, matID int64, customerBatchNo string) int64 {
+	t.Helper()
+	b, err := st.CreateBatch(context.Background(), BatchInput{
+		CustomerID: custID, MaterialID: matID, CustomerBatchNo: customerBatchNo,
+	}, m3Actor())
+	if err != nil {
+		t.Fatalf("预填批次失败: %v", err)
+	}
+	return b.ID
+}
+
 func m3Actor() MDActor {
 	return MDActor{OpenID: m3StoreOpenID, Name: "m3-store", Role: "receiver", IP: "127.0.0.1"}
 }
 
-// m3Notice 造一张预报（默认客供、预计袋数 0）。
-func m3Notice(t *testing.T, st *Store, custID, matID int64) ArrivalNotice {
+// m3Notice 造一张预报（批次内车序）。
+func m3Notice(t *testing.T, st *Store, batchID int64) ArrivalNotice {
 	t.Helper()
 	n, err := st.CreateNotice(context.Background(), NoticeInput{
-		CustomerID:  custID,
-		MaterialID:  matID,
-		PlateNo:     "湘F·测试",
-		Driver:      "司机甲",
-		EstBagCount: 0,
-		BizType:     BizTypeCG,
-		ArriveDate:  m3Date,
+		BatchID: batchID,
+		PlateNo: "湘F·测试",
+		Driver:  "司机甲",
 	}, m3Actor())
 	if err != nil {
 		t.Fatalf("登记预报失败: %v", err)
@@ -101,9 +111,9 @@ func m3Notice(t *testing.T, st *Store, custID, matID int64) ArrivalNotice {
 }
 
 // m3Arrive 造一张车次（预报 → 到货确认）。
-func m3Arrive(t *testing.T, st *Store, custID, matID int64) TruckLot {
+func m3Arrive(t *testing.T, st *Store, batchID int64) TruckLot {
 	t.Helper()
-	n := m3Notice(t, st, custID, matID)
+	n := m3Notice(t, st, batchID)
 	truck, err := st.ConfirmArrival(context.Background(), ArriveInput{NoticeID: n.ID}, m3Actor())
 	if err != nil {
 		t.Fatalf("到货确认失败: %v", err)
@@ -111,11 +121,12 @@ func m3Arrive(t *testing.T, st *Store, custID, matID int64) TruckLot {
 	return truck
 }
 
-// TC-M3-04 正常：一天内同客户同物料录 3 次预报 ⇒ 车序 01 / 02 / 03。
+// TC-M3-04 正常：同一批次内录 3 次预报 ⇒ 车序 01 / 02 / 03（N-023：批次内递增）。
 func TestTC_M3_04_SeqDailySeries(t *testing.T) {
 	st, cust, mat := m3Fixture(t)
+	batch := m3Batch(t, st, cust, mat, "M3-SEQ-01")
 	for i, want := range []int{1, 2, 3} {
-		n := m3Notice(t, st, cust, mat)
+		n := m3Notice(t, st, batch)
 		if n.SeqNo != want {
 			t.Fatalf("第 %d 次预报车序应 %02d，实际 %02d", i+1, want, n.SeqNo)
 		}
@@ -128,9 +139,10 @@ func TestTC_M3_04_SeqDailySeries(t *testing.T) {
 // TC-M3-05 ★ 边界：预报 02 的车没来（取消）⇒ 之后再录一车是 04，**不回收 02**。
 func TestTC_M3_05_GapNotRecycled(t *testing.T) {
 	st, cust, mat := m3Fixture(t)
-	first := m3Notice(t, st, cust, mat)
-	second := m3Notice(t, st, cust, mat)
-	third := m3Notice(t, st, cust, mat)
+	batch := m3Batch(t, st, cust, mat, "M3-GAP-01")
+	first := m3Notice(t, st, batch)
+	second := m3Notice(t, st, batch)
+	third := m3Notice(t, st, batch)
 	if first.SeqNo != 1 || second.SeqNo != 2 || third.SeqNo != 3 {
 		t.Fatalf("前三车应为 1/2/3，实际 %d/%d/%d", first.SeqNo, second.SeqNo, third.SeqNo)
 	}
@@ -148,7 +160,7 @@ func TestTC_M3_05_GapNotRecycled(t *testing.T) {
 		t.Fatalf("作废的序号应保持 02，实际 %02d", canceled.SeqNo)
 	}
 
-	fourth := m3Notice(t, st, cust, mat)
+	fourth := m3Notice(t, st, batch)
 	if fourth.SeqNo != 4 {
 		t.Fatalf("新车序应 04（02 不回收），实际 %02d", fourth.SeqNo)
 	}
@@ -159,6 +171,7 @@ func TestTC_M3_05_GapNotRecycled(t *testing.T) {
 // ★ 取号在「命名锁 + 同事务内 FOR UPDATE」下串行（spec#rules.concurrent_alloc）。
 func TestTC_M3_06_ConcurrentSeqNoDuplicate(t *testing.T) {
 	st, cust, mat := m3Fixture(t)
+	batch := m3Batch(t, st, cust, mat, "M3-CONC-01")
 
 	const workers = 4
 	seqs := make([]int, workers)
@@ -172,8 +185,7 @@ func TestTC_M3_06_ConcurrentSeqNoDuplicate(t *testing.T) {
 			defer done.Done()
 			start.Wait()
 			n, err := st.CreateNotice(context.Background(), NoticeInput{
-				CustomerID: cust, MaterialID: mat, BizType: BizTypeCG,
-				ArriveDate: m3Date, PlateNo: fmt.Sprintf("湘F·并发%d", i),
+				BatchID: batch, PlateNo: fmt.Sprintf("湘F·并发%d", i),
 			}, m3Actor())
 			if err == nil {
 				seqs[i] = n.SeqNo
@@ -204,7 +216,7 @@ func TestTC_M3_06_ConcurrentSeqNoDuplicate(t *testing.T) {
 func TestTC_M3_09_WeightAllocation(t *testing.T) {
 	st, cust, mat := m3Fixture(t)
 	ctx := context.Background()
-	truck := m3Arrive(t, st, cust, mat)
+	truck := m3Arrive(t, st, m3Batch(t, st, cust, mat, "M3-WGH-01"))
 
 	weighed, err := st.WeighTruck(ctx, truck.ID, WeighInput{
 		Gross: tons{milli: 35500}, Tare: tons{milli: 5000},
@@ -240,11 +252,12 @@ func TestTC_M3_09_WeightAllocation(t *testing.T) {
 	}
 }
 
-// TC-M3-10 ★★ 边界：预报 30 袋、实际 28 袋 ⇒ 只生成 28 个袋码；
-// 预报后 / 到货确认后 / 过磅后（未录袋数）查 b_bag 均为空 —— **不按预报袋数预打**。
+// TC-M3-10 ★★ 边界：实际录 28 袋 ⇒ 只生成 28 个袋码；
+// 预报后 / 到货确认后 / 过磅后（未录袋数）查 b_bag 均为空 —— **不预打袋码**（N-023 系统无预估）。
 func TestTC_M3_10_NoBagBeforeWeighConfirm(t *testing.T) {
 	st, cust, mat := m3Fixture(t)
 	ctx := context.Background()
+	batch := m3Batch(t, st, cust, mat, "M3-NOBAG-01")
 	countBags := func() int {
 		t.Helper()
 		var n int
@@ -257,10 +270,9 @@ func TestTC_M3_10_NoBagBeforeWeighConfirm(t *testing.T) {
 		return n
 	}
 
-	// ① 预报阶段（预计 30 袋）：无任何袋码
+	// ① 预报阶段：无任何袋码（N-023 系统无预估 —— 袋数只在过磅后按实际录入）
 	n, err := st.CreateNotice(ctx, NoticeInput{
-		CustomerID: cust, MaterialID: mat, BizType: BizTypeCG,
-		ArriveDate: m3Date, EstBagCount: 30,
+		BatchID: batch,
 	}, m3Actor())
 	if err != nil {
 		t.Fatalf("登记预报失败: %v", err)
@@ -294,7 +306,7 @@ func TestTC_M3_10_NoBagBeforeWeighConfirm(t *testing.T) {
 		t.Fatalf("生成袋码失败: %v", err)
 	}
 	if len(bags) != 28 || countBags() != 28 {
-		t.Fatalf("应只生成 28 个袋码（预报 30），实际 len=%d count=%d", len(bags), countBags())
+		t.Fatalf("应只生成 28 个袋码，实际 len=%d count=%d", len(bags), countBags())
 	}
 	if bags[0].BagSeq != 1 || bags[27].BagSeq != 28 {
 		t.Fatalf("袋序应 1..28，实际首=%d 末=%d", bags[0].BagSeq, bags[27].BagSeq)
