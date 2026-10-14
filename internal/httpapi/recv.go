@@ -17,7 +17,10 @@ package httpapi
 //	recv.return           退车执行登记（POST）
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -108,6 +111,63 @@ func (s *Server) mountReceiving(e *echo.Echo) {
 
 // ---- D2 预报 ----
 
+// noticeForbiddenKeys —— N-023 已删除/由批次带出的预报输入（D2：**不再接受**：
+// 显式 400 明确报错，而非静默忽略 —— 静默忽略会让旧客户端以为参数生效了）。
+var noticeForbiddenKeys = map[string]string{
+	"eta":           "预计到货时间（eta）字段已删除（N-023 系统无预估）",
+	"est_bag_count": "预计袋数字段已删除（N-023 系统无预估，一切以扫码实际为准）",
+	"arrive_date":   "到货日由到货确认时刻写入，车次预报不再接受该输入",
+	"customer_id":   "客户由批次带出（车次预报只选批次）",
+	"material_id":   "产品由批次带出（车次预报只选批次）",
+	"biz_type":      "业务类型由批次带出（批次必含客户 ⇒ 客供）",
+}
+
+// decodeNoticeInput 读取预报类请求体：顶层与嵌套 "notice"（/arrivals 内联补录）
+// 键逐一拒绝禁止字段 ⇒ 400 明确文案；空体 = 零值；其余合法 JSON 解码到 out。
+func decodeNoticeInput(c echo.Context, out interface{}) error {
+	raw, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "读取请求体失败")
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "请求体不是合法 JSON")
+	}
+	reject := func(m map[string]json.RawMessage) error {
+		// 按固定顺序报错（map 遍历无序 ⇒ 排序后取首个命中，文案稳定可断言）
+		for _, k := range noticeForbiddenKeysOrder {
+			if _, ok := m[k]; ok {
+				return echo.NewHTTPError(http.StatusBadRequest,
+					noticeForbiddenKeys[k]+"（字段 "+k+"）")
+			}
+		}
+		return nil
+	}
+	if err := reject(top); err != nil {
+		return err
+	}
+	if nested, ok := top["notice"]; ok && string(nested) != "null" {
+		var nm map[string]json.RawMessage
+		if err := json.Unmarshal(nested, &nm); err != nil {
+			return echo.NewHTTPError(http.StatusBadRequest, "请求体不是合法 JSON")
+		}
+		if err := reject(nm); err != nil {
+			return err
+		}
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "请求体不是合法 JSON")
+	}
+	return nil
+}
+
+var noticeForbiddenKeysOrder = []string{
+	"eta", "est_bag_count", "arrive_date", "customer_id", "material_id", "biz_type",
+}
+
 // handleListNotices 预报列表：?open=1 预报中（含旧版）；?pending=1 = L2
 // （★ batch_id 非空 且 预报中 —— 旧版预报排除；含所属批次号）。
 func (s *Server) handleListNotices(c echo.Context) error {
@@ -129,7 +189,7 @@ func (s *Server) handleListNotices(c echo.Context) error {
 
 func (s *Server) handleCreateNotice(c echo.Context) error {
 	var in store.NoticeInput
-	if err := decodeBody(c, &in); err != nil {
+	if err := decodeNoticeInput(c, &in); err != nil {
 		return err
 	}
 	row, err := s.Store.CreateNotice(c.Request().Context(), in, mdActor(c))
@@ -318,7 +378,7 @@ func queryInt(c echo.Context, key string) int {
 
 func (s *Server) handleConfirmArrival(c echo.Context) error {
 	var in store.ArriveInput
-	if err := decodeBody(c, &in); err != nil {
+	if err := decodeNoticeInput(c, &in); err != nil {
 		return err
 	}
 	row, err := s.Store.ConfirmArrival(c.Request().Context(), in, mdActor(c))

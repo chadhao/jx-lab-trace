@@ -151,6 +151,19 @@ func TestN023_Shape_CreateNoticeAndL2(t *testing.T) {
 		t.Fatalf("缺 batch_id 应 400，实际 %d body=%v", resp.StatusCode, out)
 	}
 
+	// ★ D2「不再接受」：已删/批次带出字段显式 400（不静默忽略）
+	for _, bad := range []string{
+		`{"batch_id":1,"est_bag_count":9}`,
+		`{"batch_id":1,"eta":"2026-10-20T00:00:00Z"}`,
+		`{"batch_id":1,"arrive_date":"2026-10-20"}`,
+		`{"batch_id":1,"customer_id":9}`,
+	} {
+		resp, out = e.do("POST", "/api/recv/notices", ck, bad)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("携带禁字段 %s 应 400，实际 %d body=%v", bad, resp.StatusCode, out)
+		}
+	}
+
 	// 正常预报
 	resp, out = e.do("POST", "/api/recv/notices", ck,
 		fmt.Sprintf(`{"batch_id":%d,"plate_no":"湘F·N023","driver":"司机丁","phone":"13800000000"}`, batchID))
