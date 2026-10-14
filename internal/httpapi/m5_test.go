@@ -72,6 +72,8 @@ func m5HTTPWipe(t *testing.T, st *store.Store) {
 	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m5CustCode)
 	q(`DELETE FROM b_arrival_notice WHERE created_by = ?
 	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m5CustCode)
+	q(`DELETE FROM m_incoming_batch WHERE created_by = ?
+	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m5CustCode)
 	q(`DELETE FROM b_label_print WHERE created_by = ?`, me)
 	q(`DELETE FROM b_production_batch WHERE created_by = ?`, me)
 	q(`DELETE FROM b_fg_lot WHERE created_by = ?`, me)

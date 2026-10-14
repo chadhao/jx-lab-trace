@@ -18,7 +18,9 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -158,13 +160,13 @@ func (s *Store) CreateBatch(ctx context.Context, in BatchInput, actor MDActor) (
 	}
 	defer tx.Rollback()
 
-	// ★ 同一秒内同客户同物料多批次 ⇒ F 码时间戳撞 uk_our_batch_no：
-	//	时间戳整体后移 1 秒重生成（最多 5 次）；三元组冲突不重试，直接回已有批次。
+	// ★ F 码唯一性（见 genBatchCode 注释）：分钟时间戳 + 随机防撞段；
+	//	冲突（同分同客户同物料同随机，概率 1/1000）⇒ **原地重掷随机**，时间不前移。
+	//	三元组冲突不重试，直接回已有批次。
 	var id int64
 	var ourNo string
 	for attempt := 0; attempt < 5; attempt++ {
-		at := time.Now().Add(time.Duration(attempt) * time.Second)
-		ourNo, err = genBatchCode(custCode, matCode, at)
+		ourNo, err = genBatchCode(custCode, matCode, time.Now())
 		if err != nil {
 			return IncomingBatch{}, err
 		}
@@ -504,9 +506,22 @@ SELECT batch_id, COUNT(*) FROM (
 	return m, nil
 }
 
-// genBatchCode 生成 F 码（含创建时刻时间戳）：
-// DATE = YYMMDD，SEQ1 = HH，SEQ2 = 分钟（3 位左补零），SEQ3 = 秒（3 位左补零）。
+// genBatchCode 生成 F 码（含创建时刻时间戳 + 随机防撞段）：
+// DATE = YYMMDD（预填日），SEQ1 = HH，SEQ2 = 分钟（3 位左补零），
+// SEQ3 = **000-999 随机防撞段**（crypto/rand）。
+//
+// ★ 唯一口径（服务器 TC 实测修正）：曾用「秒级时间戳 + 冲突后时间+1s 重试」——
+//
+//	高频预填（同客户同物料 <1s 连续多批次）下，重试写入的**超前时间戳**会级联占位：
+//	超前量逐次累积到 +4s 仍撞 ⇒ 5 连败假死。
+//	改为「分钟时间戳 + 随机段」后：同分同客户同物料撞率 1/1000，撞了**原地重掷随机**
+//	（时间不前移 ⇒ 不产生超前占位、无级联）；uk_our_batch_no 仍作最终兜底。
 func genBatchCode(custCode, matCode string, t time.Time) (string, error) {
+	buf := make([]byte, 2)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("生成批次号随机段失败: %w", err)
+	}
+	rnd := int(binary.BigEndian.Uint16(buf)) % 1000 // 0..999
 	return codec.Generate(codec.Segments{
 		T:        "F",
 		BT:       BizTypeCG, // 批次必含客户（DDL customer_id NOT NULL）⇒ 恒客供
@@ -515,7 +530,7 @@ func genBatchCode(custCode, matCode string, t time.Time) (string, error) {
 		Date:     yymmdd(t.Format("2006-01-02")),
 		SEQ1:     pad(t.Hour(), 2),
 		SEQ2:     pad(t.Minute(), 3),
-		SEQ3:     pad(t.Second(), 3),
+		SEQ3:     pad(rnd, 3),
 	})
 }
 

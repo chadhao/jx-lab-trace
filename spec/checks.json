@@ -207,6 +207,13 @@
       "file": "internal/store/receiving.go",
       "pattern": "EstBagCount int\\s+`json:\"est_bag_count\"`",
       "desc": "预报读模型已无 est_bag_count 输出字段"
+    },
+    {
+      "id": "N023-28",
+      "kind": "source_regex",
+      "file": "internal/store/batch.go",
+      "pattern": "binary\\.BigEndian\\.Uint16",
+      "desc": "F 码随机防撞段（分钟时间戳+随机；秒级进位方案已按 TC 实测废弃）"
     }
   ]
 }

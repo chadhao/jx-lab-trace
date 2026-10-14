@@ -70,6 +70,8 @@ func m8HTTPWipe(t *testing.T, st *store.Store) {
 	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m8HCustCode)
 	q(`DELETE FROM b_arrival_notice WHERE created_by = ?
 	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m8HCustCode)
+	q(`DELETE FROM m_incoming_batch WHERE created_by = ?
+	     OR customer_id IN (SELECT id FROM m_customer WHERE code = ?)`, me, m8HCustCode)
 	q(`DELETE FROM s_audit_log WHERE actor_open_id IN (?, ?)`, me, m8HMgmtOpenID)
 	q(`DELETE FROM m_customer WHERE code = ? AND created_by LIKE 'ou\_test\_%'`, m8HCustCode)
 	q(`DELETE FROM m_material WHERE code IN (?, ?) AND created_by LIKE 'ou\_test\_%'`,

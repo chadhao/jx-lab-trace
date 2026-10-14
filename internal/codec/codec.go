@@ -80,9 +80,10 @@ var objectTypes = map[byte]ObjectSpec{
 	'C': {Type: 'C', Name: "生产批", Chain: "成品链", Depth: 1, MaterialSlot: "成品物料(计划产出)", Seq1: "批序", Seq2: "000", Seq3: "000"},
 	'D': {Type: 'D', Name: "成品批", Chain: "成品链", Depth: 2, MaterialSlot: "成品物料", Seq1: "来源生产批序", Seq2: "该生产批内第n个成品批", Seq3: "000"},
 	'E': {Type: 'E', Name: "成品吨袋", Chain: "成品链", Depth: 3, MaterialSlot: "成品物料", Seq1: "来源生产批序", Seq2: "成品批序", Seq3: "袋序"},
-	// ★ N-023 来料批次：三段序承载**创建时刻**（时/分/秒）而非链路径 ——
-	//	批次在链根之前（客户下单预填），不属于「从链根到本对象」的嵌套语义（见 spec#object_types.F.note）。
-	'F': {Type: 'F', Name: "来料批次", Chain: "原料链", Depth: 3, MaterialSlot: "原料物料", Seq1: "时(HH)", Seq2: "分(0MM)", Seq3: "秒(0SS)"},
+	// ★ N-023 来料批次：三段序承载**创建时刻 + 防撞随机段**（DATE=预填日，时/分/随机）
+	//	而非链路径 —— 批次在链根之前（客户下单预填），不属于「从链根到本对象」的嵌套语义
+	//	（见 spec#object_types.F.note）。
+	'F': {Type: 'F', Name: "来料批次", Chain: "原料链", Depth: 3, MaterialSlot: "原料物料", Seq1: "时(HH)", Seq2: "分(0MM)", Seq3: "随机(RND,000-999)"},
 }
 
 // ObjectOf 返回对象类型的层级语义；未知类型返回 false。
