@@ -294,3 +294,18 @@ td.grey {
 a.btn-primary { display: inline-block; padding: .55rem 1.4rem; border-radius: 6px;
   background: #1a73e8; color: #fff; text-decoration: none; font-weight: 600; }
 a.btn-primary:hover { background: #1765cc; }
+
+/* ★ N-023 · 收货页三列表改造：L3 查询「旧版」单选行（Receiving.vue search 页签 .form 内的横排 radio）。 */
+.form .radios {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+}
+.form .radios label {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.3rem;
+  color: inherit;
+}

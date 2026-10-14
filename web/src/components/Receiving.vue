@@ -1,19 +1,25 @@
 <script setup>
-// 收货页（M3）：预报登记与车序 · 到货确认 · 过磅与袋码批量生成 · 标签打印/补打 · 袋作废与退车。
+// 收货页（M3 / N-023 D3）：三列表结构 ——
+//   ① 未关闭批次 L1（批次预填 · 进度 · 关闭 · 继续预报）
+//   ② 未到货车次 L2（车次预报 · 到货确认 · 修改 · 取消/空号）
+//   ③ 查询 L3（批次＋车次统一多条件查询；旧版预报只展示不可编辑）
+//   ④ 过磅与袋码 / ⑤ 标签打印 / ⑥ 作废与退车（原样保留）
 // ★ 主数据下拉只取**启用**项（复用批 2 的 is_current / status 口径）。
 // ★ 标签版式页由服务端生成，这里只负责打开浏览器打印窗口（一期不写打印驱动）。
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../api.js'
 
 defineProps({ me: { type: Object, default: null } })
 
 const TABS = [
-  { k: 'notice', n: '预报与到货' },
+  { k: 'batch', n: '未关闭批次' },
+  { k: 'notice', n: '未到货车次' },
+  { k: 'search', n: '查询' },
   { k: 'truck', n: '过磅与袋码' },
   { k: 'label', n: '标签打印' },
   { k: 'void', n: '作废与退车' },
 ]
-const tab = ref('notice')
+const tab = ref('batch')
 const msg = ref('')
 const err = ref('')
 
@@ -38,100 +44,194 @@ async function loadMaster() {
   }
 }
 
-function today() {
-  const d = new Date()
-  const p = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
-
 function label(row) {
   return `${row.code || ''} ${row.name || row.plate_no || ''}`.trim()
 }
 
-// ---- 预报 ----
-const notices = ref([])
-const noticeForm = ref(null) // null = 关闭；{ id?, ... }
-const noticeErr = ref('')
+// 查询串拼接：空值不入参（后端空串/0 = 不限）。
+function qs(params) {
+  const p = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== '' && v !== null && v !== undefined) p.set(k, v)
+  }
+  const s = p.toString()
+  return s ? '?' + s : ''
+}
 
-function emptyNotice() {
-  return {
-    biz_type: 'CG',
-    customer_id: '',
-    material_id: '',
-    vehicle_id: '',
-    plate_no: '',
-    driver: '',
-    phone: '',
-    eta: '',
-    est_bag_count: '',
-    arrive_date: today(),
-    reason: '',
+// 全量刷新列表（三列表共享；已跑过 L3 查询则顺带重跑）。
+async function refreshLists() {
+  await Promise.all([loadBatches(), loadOpenBatches(), loadNotices()])
+  if (searchResult.value) await runSearch()
+}
+
+// ===== L1 · 未关闭批次 =====
+const batches = ref([])
+const batchStatus = ref('回货中') // 回货中 / 已关闭 / 全部
+const batchForm = ref({ customer_id: '', material_id: '', customer_batch_no: '' })
+const batchMsg = ref('')
+const batchErr = ref('')
+const batchExisting = ref([]) // 400 三元组重复时的已有批次（展示/跳转）
+
+async function loadBatches() {
+  try {
+    const data = await api.get('/api/recv/batches' + qs({ status: batchStatus.value }))
+    batches.value = data.rows || []
+  } catch (e) {
+    batches.value = []
+    if (!err.value) err.value = e.message
   }
 }
 
-async function loadNotices() {
-  err.value = ''
+async function createBatch() {
+  batchErr.value = ''
+  batchMsg.value = ''
+  batchExisting.value = []
+  const f = batchForm.value
+  if (!f.customer_id || !f.material_id || !String(f.customer_batch_no).trim()) {
+    batchErr.value = '客户 / 产品 / 客户批次号均为必填'
+    return
+  }
   try {
-    const data = await api.get('/api/recv/notices')
-    notices.value = data.rows || []
+    const data = await api.post('/api/recv/batches', {
+      customer_id: Number(f.customer_id),
+      material_id: Number(f.material_id),
+      customer_batch_no: String(f.customer_batch_no).trim(),
+    })
+    batchMsg.value = data.row.our_batch_no
+    f.customer_batch_no = ''
+    await refreshLists()
   } catch (e) {
-    notices.value = []
+    // 400 三元组重复：e.data.existing 附已有批次供跳转
+    batchErr.value = e.message
+    batchExisting.value = (e.data && e.data.existing) || []
+  }
+}
+
+async function closeBatch(b) {
+  if (!window.confirm(`确认关闭批次 ${b.our_batch_no}（客户批次 ${b.customer_batch_no}）？关闭后该批次不可再预报新车次。`)) return
+  try {
+    await api.post(`/api/recv/batches/${b.id}/close`)
+    msg.value = `批次 ${b.our_batch_no} 已关闭（接口幂等）`
+    await refreshLists()
+  } catch (e) {
     err.value = e.message
   }
 }
 
-function openNotice(n) {
+// 继续预报：切到车次预报表单并预选该批次（清筛选，保证预选项在下拉里可见）。
+function continueForecast(b) {
+  noticeFilter.value = { customer_id: '', material_id: '' }
+  noticeForm.value.batch_id = b.id
   noticeErr.value = ''
-  if (n) {
-    noticeForm.value = {
-      id: n.id,
-      biz_type: n.biz_type,
-      customer_id: n.customer_id || '',
-      material_id: n.material_id || '',
-      vehicle_id: n.vehicle_id || '',
-      plate_no: n.plate_no || '',
-      driver: n.driver || '',
-      phone: n.phone || '',
-      eta: n.eta ? new Date(n.eta).toISOString().slice(0, 16) : '',
-      est_bag_count: n.est_bag_count || '',
-      arrive_date: n.arrive_date,
-      reason: '',
-    }
-  } else {
-    noticeForm.value = emptyNotice()
+  tab.value = 'notice'
+}
+
+// 400 已有批次 → 跳查询页按我方批次号检索。
+function jumpExisting(b) {
+  searchForm.value.our_batch_no = b.our_batch_no
+  searchResult.value = null
+  tab.value = 'search'
+  runSearch()
+}
+
+// ===== L2 · 未到货车次（车次预报 + 到货确认） =====
+const notices = ref([])
+// 车次预报的批次下拉：仅回货中（关闭后不可预报）。
+const openBatches = ref([])
+// 下拉前的客户/产品可选筛选（前端过滤批次选项）。
+const noticeFilter = ref({ customer_id: '', material_id: '' })
+const noticeForm = ref({ batch_id: '', vehicle_id: '', plate_no: '', driver: '', phone: '' })
+const noticeErr = ref('')
+
+const filteredOpenBatches = computed(() =>
+  openBatches.value.filter(
+    (b) =>
+      (!noticeFilter.value.customer_id || Number(b.customer_id) === Number(noticeFilter.value.customer_id)) &&
+      (!noticeFilter.value.material_id || Number(b.material_id) === Number(noticeFilter.value.material_id)),
+  ),
+)
+
+async function loadOpenBatches() {
+  try {
+    const data = await api.get('/api/recv/batches?status=' + encodeURIComponent('回货中'))
+    openBatches.value = data.rows || []
+  } catch (e) {
+    openBatches.value = []
+    if (!err.value) err.value = e.message
   }
 }
 
-async function saveNotice() {
+async function loadNotices() {
+  try {
+    const data = await api.get('/api/recv/notices?pending=1')
+    notices.value = data.rows || []
+  } catch (e) {
+    notices.value = []
+    if (!err.value) err.value = e.message
+  }
+}
+
+async function submitNotice() {
   noticeErr.value = ''
   const f = noticeForm.value
-  if (!f.material_id) { noticeErr.value = '必须选择原料物料'; return }
-  if (f.biz_type === 'CG' && !f.customer_id) { noticeErr.value = '客供必须选择客户'; return }
-  const payload = {
-    biz_type: f.biz_type,
-    customer_id: f.biz_type === 'ZG' ? 0 : Number(f.customer_id || 0),
-    material_id: Number(f.material_id),
-    vehicle_id: Number(f.vehicle_id || 0),
-    plate_no: f.plate_no,
-    driver: f.driver,
-    phone: f.phone,
-    est_bag_count: Number(f.est_bag_count || 0),
-    arrive_date: f.arrive_date,
+  if (!f.batch_id) {
+    noticeErr.value = '必须选择批次'
+    return
   }
-  if (f.eta) payload.eta = new Date(f.eta).toISOString()
   try {
-    if (f.id) {
-      if (!f.reason) { noticeErr.value = '修改预报必须填原因（且车序不变）'; return }
-      await api.put(`/api/recv/notices/${f.id}`, Object.assign({ reason: f.reason }, payload))
-      msg.value = '预报已更新（车序保持不变）'
-    } else {
-      const data = await api.post('/api/recv/notices', payload)
-      msg.value = `预报已登记，分配车序 ${String(data.row.seq_no).padStart(2, '0')}`
-    }
-    noticeForm.value = null
-    await loadNotices()
+    const data = await api.post('/api/recv/notices', {
+      batch_id: Number(f.batch_id),
+      vehicle_id: Number(f.vehicle_id || 0),
+      plate_no: f.plate_no,
+      driver: f.driver,
+      phone: f.phone,
+    })
+    msg.value = `预报已登记，批次内车序 ${String(data.row.seq_no).padStart(2, '0')}（预报单 ${data.row.notice_no}）`
+    f.vehicle_id = ''
+    f.plate_no = ''
+    f.driver = ''
+    f.phone = ''
+    await refreshLists()
   } catch (e) {
     noticeErr.value = e.message
+  }
+}
+
+// 修改预报（只允许车牌/司机/电话；必须填原因，车序不变）。
+const noticeEdit = ref(null) // { id, notice_no, plate_no, driver, phone, reason }
+const noticeEditErr = ref('')
+
+function openNoticeEdit(n) {
+  noticeEditErr.value = ''
+  noticeEdit.value = {
+    id: n.id,
+    notice_no: n.notice_no,
+    plate_no: n.plate_no || '',
+    driver: n.driver || '',
+    phone: n.phone || '',
+    reason: '',
+  }
+}
+
+async function saveNoticeEdit() {
+  noticeEditErr.value = ''
+  const f = noticeEdit.value
+  if (!f.reason) {
+    noticeEditErr.value = '修改预报必须填原因（车序保持不变）'
+    return
+  }
+  try {
+    await api.put(`/api/recv/notices/${f.id}`, {
+      reason: f.reason,
+      plate_no: f.plate_no,
+      driver: f.driver,
+      phone: f.phone,
+    })
+    msg.value = `${f.notice_no} 已更新（车序保持不变）`
+    noticeEdit.value = null
+    await refreshLists()
+  } catch (e) {
+    noticeEditErr.value = e.message
   }
 }
 
@@ -141,7 +241,7 @@ async function cancelNotice(n, status) {
   try {
     await api.patch(`/api/recv/notices/${n.id}/status`, { status, reason })
     msg.value = `${n.notice_no} 已置为「${status}」（车序 ${n.seq_no} 不回收）`
-    await loadNotices()
+    await refreshLists()
   } catch (e) {
     err.value = e.message
   }
@@ -151,14 +251,50 @@ async function confirmArrival(n) {
   try {
     const data = await api.post('/api/recv/arrivals', { notice_id: n.id })
     msg.value = `到货确认成功：车码 ${data.row.human || data.row.code}`
-    await loadNotices()
+    await refreshLists()
     await loadTrucks()
   } catch (e) {
     err.value = e.message
   }
 }
 
-// ---- 车次：过磅与袋码 ----
+// ===== L3 · 统一查询 =====
+const searchForm = ref({
+  customer_id: '',
+  material_id: '',
+  customer_batch_no: '',
+  our_batch_no: '',
+  batch_status: '',
+  notice_status: '',
+  plate: '',
+  legacy: '', // '' = 全部 · '0' = 只看批次预报 · '1' = 只看旧版
+})
+const searchResult = ref(null) // { batch_count, batches, notice_count, notices }
+
+async function runSearch() {
+  err.value = ''
+  const f = searchForm.value
+  try {
+    const data = await api.get(
+      '/api/recv/search' +
+        qs({
+          customer_id: f.customer_id,
+          material_id: f.material_id,
+          customer_batch_no: f.customer_batch_no,
+          our_batch_no: f.our_batch_no,
+          batch_status: f.batch_status,
+          notice_status: f.notice_status,
+          plate: f.plate,
+          legacy: f.legacy,
+        }),
+    )
+    searchResult.value = data
+  } catch (e) {
+    err.value = e.message
+  }
+}
+
+// ===== 车次：过磅与袋码 =====
 const trucks = ref([])
 const truckId = ref('')
 const bags = ref([])
@@ -222,7 +358,7 @@ async function genBags() {
   }
 }
 
-// ---- 标签打印 ----
+// ===== 标签打印 =====
 const pickedCodes = ref([])
 const reprintReason = ref('')
 
@@ -245,10 +381,16 @@ function openPrintWindow(pageUrl) {
 
 async function printLabels(isReprint) {
   truckErr.value = ''
-  if (!pickedCodes.value.length) { truckErr.value = '请先勾选要打印的标签'; return }
+  if (!pickedCodes.value.length) {
+    truckErr.value = '请先勾选要打印的标签'
+    return
+  }
   const body = { codes: pickedCodes.value }
   if (isReprint) {
-    if (!reprintReason.value) { truckErr.value = '补打必须填原因（否则会出现「一物两码」）'; return }
+    if (!reprintReason.value) {
+      truckErr.value = '补打必须填原因（否则会出现「一物两码」）'
+      return
+    }
     body.reason = reprintReason.value
   }
   try {
@@ -262,7 +404,7 @@ async function printLabels(isReprint) {
   }
 }
 
-// ---- 作废与退车 ----
+// ===== 作废与退车 =====
 const voidErr = ref('')
 
 async function voidBag(bag) {
@@ -296,6 +438,8 @@ async function returnTruck() {
 
 onMounted(() => {
   loadMaster()
+  loadBatches()
+  loadOpenBatches()
   loadNotices()
   loadTrucks()
 })
@@ -305,7 +449,8 @@ onMounted(() => {
   <section>
     <h2>收货与打码（M3）</h2>
     <p class="hint">
-      预报分配<b>车序</b> → 到货确认生成<b>车码 A</b> → 过磅后按<b>实际袋数</b>批量生成<b>袋码 B</b> → 打印标签。
+      预填<b>批次</b>（客户＋产品＋客户批次号）→ 批次内车次预报分配<b>车序</b> → 到货确认生成<b>车码 A</b>
+      → 过磅后按<b>实际袋数</b>批量生成<b>袋码 B</b> → 打印标签。
       跳号不回收、超限不进位、补打必填原因、已取样/已投料的袋不许作废。
     </p>
 
@@ -316,39 +461,146 @@ onMounted(() => {
     <p v-if="msg" class="ok">{{ msg }}</p>
     <p v-if="err" class="err">{{ err }}</p>
 
-    <!-- ===== 预报与到货 ===== -->
-    <template v-if="tab === 'notice'">
-      <div class="toolbar">
-        <button @click="openNotice(null)">登记预报</button>
-        <button class="ghost" @click="loadNotices">刷新</button>
-        <span class="hint">共 {{ notices.length }} 条</span>
+    <!-- ===== 修改预报（L2/L3 共用行内表单） ===== -->
+    <div v-if="noticeEdit && (tab === 'notice' || tab === 'search')" class="panel">
+      <div class="panel-head">
+        <b>修改预报 {{ noticeEdit.notice_no }}（车序不变）</b>
+        <button class="ghost" @click="noticeEdit = null">收起</button>
       </div>
+      <div class="form">
+        <label><span>车牌号</span><input v-model="noticeEdit.plate_no" placeholder="湘F·xxxxx" /></label>
+        <label><span>司机</span><input v-model="noticeEdit.driver" /></label>
+        <label><span>司机电话</span><input v-model="noticeEdit.phone" /></label>
+        <label class="full">
+          <span>修改原因<em>*</em></span>
+          <input v-model="noticeEdit.reason" placeholder="必填：落审计；车序保持不动" />
+        </label>
+        <p v-if="noticeEditErr" class="err full">{{ noticeEditErr }}</p>
+        <div class="full">
+          <button @click="saveNoticeEdit">保存</button>
+          <button class="ghost" @click="noticeEdit = null">取消</button>
+        </div>
+      </div>
+    </div>
 
-      <div v-if="noticeForm" class="panel">
+    <!-- ===== L1 · 未关闭批次 ===== -->
+    <template v-if="tab === 'batch'">
+      <div class="panel">
         <div class="panel-head">
-          <b>{{ noticeForm.id ? '修改预报（车序不变）' : '登记预报（系统分配车序）' }}</b>
-          <button class="ghost" @click="noticeForm = null">取消</button>
+          <b>批次预填（客户＋产品＋客户批次号，三元组唯一）</b>
         </div>
         <div class="form">
           <label>
-            <span>业务类型</span>
-            <select v-model="noticeForm.biz_type">
-              <option value="CG">CG 客供（受托加工）</option>
-              <option value="ZG">ZG 自购（客户段填 0000）</option>
-            </select>
-          </label>
-          <label v-if="noticeForm.biz_type === 'CG'">
             <span>客户<em>*</em></span>
-            <select v-model="noticeForm.customer_id">
+            <select v-model="batchForm.customer_id">
               <option value="">请选择</option>
               <option v-for="c in customers" :key="c.id" :value="c.id">{{ label(c) }}</option>
             </select>
           </label>
           <label>
-            <span>原料物料<em>*</em></span>
-            <select v-model="noticeForm.material_id">
+            <span>产品（原料）<em>*</em></span>
+            <select v-model="batchForm.material_id">
               <option value="">请选择</option>
               <option v-for="m in materials" :key="m.id" :value="m.id">{{ label(m) }}</option>
+            </select>
+          </label>
+          <label>
+            <span>客户批次号<em>*</em></span>
+            <input v-model="batchForm.customer_batch_no" placeholder="供应商批号" />
+          </label>
+          <div class="full">
+            <button @click="createBatch">预填批次</button>
+            <span class="hint"> 提交后生成我方批次号；同一三元组不可重复预填</span>
+          </div>
+          <p v-if="batchMsg" class="ok full">
+            已创建批次，我方批次号 <b class="mono">{{ batchMsg }}</b>
+          </p>
+          <p v-if="batchErr" class="err full">{{ batchErr }}</p>
+          <div v-if="batchExisting.length" class="full">
+            <span class="hint">已有批次（点击跳查询）：</span>
+            <button
+              v-for="b in batchExisting"
+              :key="b.id || b.our_batch_no"
+              class="ghost"
+              @click="jumpExisting(b)"
+            >
+              <span class="mono">{{ b.our_batch_no }}</span> / {{ b.customer_batch_no }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <span>状态：</span>
+        <select v-model="batchStatus" @change="loadBatches">
+          <option value="回货中">回货中</option>
+          <option value="已关闭">已关闭</option>
+          <option value="">全部</option>
+        </select>
+        <button class="ghost" @click="loadBatches">刷新</button>
+        <span class="hint">共 {{ batches.length }} 条</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>我方批次号</th><th>客户批次号</th><th>客户</th><th>产品</th><th>状态</th>
+            <th>车次数</th><th>已到货</th><th>已投完</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="b in batches" :key="b.id">
+            <td class="mono">{{ b.our_batch_no }}</td>
+            <td>{{ b.customer_batch_no }}</td>
+            <td>{{ b.customer_code ? b.customer_code + ' ' + b.customer_name : '—' }}</td>
+            <td>{{ b.material_code + ' ' + b.material_name }}</td>
+            <td>{{ b.status }}</td>
+            <td>{{ b.notice_count }}</td>
+            <td>{{ b.arrived_count }}</td>
+            <td>已投 {{ b.fed_done_count }}/{{ b.arrived_count }} 车</td>
+            <td class="ops">
+              <template v-if="b.status !== '已关闭'">
+                <button @click="closeBatch(b)">关闭</button>
+                <button class="ghost" @click="continueForecast(b)">继续预报</button>
+              </template>
+              <span v-else class="hint">已关闭</span>
+            </td>
+          </tr>
+          <tr v-if="!batches.length">
+            <td colspan="9" class="empty">（暂无批次）</td>
+          </tr>
+        </tbody>
+      </table>
+    </template>
+
+    <!-- ===== L2 · 未到货车次 ===== -->
+    <template v-else-if="tab === 'notice'">
+      <div class="panel">
+        <div class="panel-head">
+          <b>车次预报（系统分配批次内车序）</b>
+        </div>
+        <div class="form">
+          <label>
+            <span>客户筛选（可选，前端过滤批次）</span>
+            <select v-model="noticeFilter.customer_id">
+              <option value="">全部客户</option>
+              <option v-for="c in customers" :key="c.id" :value="c.id">{{ label(c) }}</option>
+            </select>
+          </label>
+          <label>
+            <span>产品筛选（可选，前端过滤批次）</span>
+            <select v-model="noticeFilter.material_id">
+              <option value="">全部产品</option>
+              <option v-for="m in materials" :key="m.id" :value="m.id">{{ label(m) }}</option>
+            </select>
+          </label>
+          <label>
+            <span>批次（仅回货中）<em>*</em></span>
+            <select v-model="noticeForm.batch_id">
+              <option value="">请选择</option>
+              <option v-for="b in filteredOpenBatches" :key="b.id" :value="b.id">
+                {{ b.our_batch_no }} {{ b.customer_batch_no }} {{ b.customer_name }} {{ b.material_name }}
+              </option>
             </select>
           </label>
           <label>
@@ -361,47 +613,40 @@ onMounted(() => {
           <label><span>车牌号</span><input v-model="noticeForm.plate_no" placeholder="湘F·xxxxx" /></label>
           <label><span>司机</span><input v-model="noticeForm.driver" /></label>
           <label><span>司机电话</span><input v-model="noticeForm.phone" /></label>
-          <label><span>预计到货时间</span><input v-model="noticeForm.eta" type="datetime-local" /></label>
-          <label><span>预计袋数（仅预报用，不据此打码）</span><input v-model="noticeForm.est_bag_count" type="number" min="0" /></label>
-          <label>
-            <span>到货日（车序空间的链根日期，登记后不可改）</span>
-            <input v-model="noticeForm.arrive_date" type="date" :disabled="!!noticeForm.id" />
-          </label>
-          <label v-if="noticeForm.id" class="full">
-            <span>修改原因<em>*</em></span>
-            <input v-model="noticeForm.reason" placeholder="必填：落审计；车序保持不动" />
-          </label>
           <p v-if="noticeErr" class="err full">{{ noticeErr }}</p>
           <div class="full">
-            <button @click="saveNotice">保存</button>
-            <button class="ghost" @click="noticeForm = null">取消</button>
+            <button @click="submitNotice">登记预报</button>
+            <span class="hint"> 客户/产品/批次号由批次带出；无预计袋数与预计到货时间</span>
           </div>
         </div>
+      </div>
+
+      <div class="toolbar">
+        <button class="ghost" @click="refreshLists">刷新</button>
+        <span class="hint">共 {{ notices.length }} 条未到货车次</span>
       </div>
 
       <table>
         <thead>
           <tr>
-            <th>车序</th><th>预报单号</th><th>客户</th><th>物料</th><th>车牌</th><th>司机</th>
-            <th>电话</th><th>预计到货</th><th>预计袋数</th><th>状态</th><th>操作</th>
+            <th>车序</th><th>预报单号</th><th>我方批次号</th><th>客户批次号</th><th>车牌</th>
+            <th>司机</th><th>电话</th><th>状态</th><th>操作</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="n in notices" :key="n.id">
             <td>{{ String(n.seq_no).padStart(2, '0') }}</td>
             <td>{{ n.notice_no }}</td>
-            <td>{{ n.customer_code ? n.customer_code + ' ' + n.customer_name : '—' }}</td>
-            <td>{{ n.material_code + ' ' + n.material_name }}</td>
+            <td class="mono">{{ n.our_batch_no }}</td>
+            <td>{{ n.customer_batch_no }}</td>
             <td>{{ n.plate_no || '—' }}</td>
             <td>{{ n.driver || '—' }}</td>
             <td>{{ n.phone || '—' }}</td>
-            <td>{{ n.eta ? new Date(n.eta).toLocaleString() : '—' }}</td>
-            <td>{{ n.est_bag_count }}</td>
             <td>{{ n.status }}</td>
             <td class="ops">
               <template v-if="n.status === '预报'">
                 <button @click="confirmArrival(n)">到货确认</button>
-                <button class="ghost" @click="openNotice(n)">修改</button>
+                <button class="ghost" @click="openNoticeEdit(n)">修改</button>
                 <button class="ghost" @click="cancelNotice(n, '已取消')">取消</button>
                 <button class="ghost" @click="cancelNotice(n, '空号')">空号</button>
               </template>
@@ -409,10 +654,136 @@ onMounted(() => {
             </td>
           </tr>
           <tr v-if="!notices.length">
-            <td colspan="11" class="empty">（暂无预报）</td>
+            <td colspan="9" class="empty">（暂无未到货车次）</td>
           </tr>
         </tbody>
       </table>
+    </template>
+
+    <!-- ===== L3 · 查询 ===== -->
+    <template v-else-if="tab === 'search'">
+      <div class="panel">
+        <div class="panel-head">
+          <b>统一查询（批次 ＋ 车次预报）</b>
+        </div>
+        <div class="form">
+          <label>
+            <span>客户</span>
+            <select v-model="searchForm.customer_id">
+              <option value="">全部</option>
+              <option v-for="c in customers" :key="c.id" :value="c.id">{{ label(c) }}</option>
+            </select>
+          </label>
+          <label>
+            <span>产品（原料）</span>
+            <select v-model="searchForm.material_id">
+              <option value="">全部</option>
+              <option v-for="m in materials" :key="m.id" :value="m.id">{{ label(m) }}</option>
+            </select>
+          </label>
+          <label><span>客户批次号</span><input v-model="searchForm.customer_batch_no" placeholder="模糊匹配" /></label>
+          <label><span>我方批次号</span><input v-model="searchForm.our_batch_no" placeholder="精确匹配" class="mono" /></label>
+          <label>
+            <span>批次状态</span>
+            <select v-model="searchForm.batch_status">
+              <option value="">全部</option>
+              <option value="回货中">回货中</option>
+              <option value="已关闭">已关闭</option>
+            </select>
+          </label>
+          <label>
+            <span>预报状态</span>
+            <select v-model="searchForm.notice_status">
+              <option value="">全部</option>
+              <option value="预报">预报</option>
+              <option value="已到货">已到货</option>
+              <option value="已取消">已取消</option>
+              <option value="空号">空号</option>
+            </select>
+          </label>
+          <label><span>车牌</span><input v-model="searchForm.plate" placeholder="车牌号" /></label>
+          <div class="full radios">
+            <span>旧版：</span>
+            <label><input v-model="searchForm.legacy" type="radio" value="" />全部</label>
+            <label><input v-model="searchForm.legacy" type="radio" value="0" />只看批次预报</label>
+            <label><input v-model="searchForm.legacy" type="radio" value="1" />只看旧版</label>
+          </div>
+          <div class="full">
+            <button @click="runSearch">查询</button>
+          </div>
+        </div>
+      </div>
+
+      <template v-if="searchResult">
+        <p class="hint">
+          批次 {{ searchResult.batch_count }} 条 · 车次预报 {{ searchResult.notice_count }} 条
+        </p>
+
+        <h3>批次</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>我方批次号</th><th>客户批次号</th><th>客户</th><th>产品</th><th>状态</th>
+              <th>车次数</th><th>已到货</th><th>已投完</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="b in searchResult.batches" :key="b.id">
+              <td class="mono">{{ b.our_batch_no }}</td>
+              <td>{{ b.customer_batch_no }}</td>
+              <td>{{ b.customer_code ? b.customer_code + ' ' + b.customer_name : '—' }}</td>
+              <td>{{ b.material_code + ' ' + b.material_name }}</td>
+              <td>{{ b.status }}</td>
+              <td>{{ b.notice_count }}</td>
+              <td>{{ b.arrived_count }}</td>
+              <td>已投 {{ b.fed_done_count }}/{{ b.arrived_count }} 车</td>
+            </tr>
+            <tr v-if="!searchResult.batches.length">
+              <td colspan="8" class="empty">（无匹配批次）</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>车次预报</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>车序</th><th>预报单号</th><th>我方批次号</th><th>客户批次号</th><th>车牌</th>
+              <th>司机</th><th>电话</th><th>状态</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="n in searchResult.notices" :key="n.id">
+              <td>{{ String(n.seq_no).padStart(2, '0') }}</td>
+              <td>
+                {{ n.notice_no }}
+                <span v-if="n.legacy" class="tag">旧版</span>
+              </td>
+              <td class="mono">{{ n.our_batch_no || '—' }}</td>
+              <td>{{ n.customer_batch_no || '—' }}</td>
+              <td>{{ n.plate_no || '—' }}</td>
+              <td>{{ n.driver || '—' }}</td>
+              <td>{{ n.phone || '—' }}</td>
+              <td>{{ n.status }}</td>
+              <td class="ops">
+                <!-- 旧版预报（batch_id=0）：只展示，不可编辑/取消 -->
+                <span v-if="n.legacy" class="hint">旧版只读</span>
+                <template v-else-if="n.status === '预报'">
+                  <button @click="confirmArrival(n)">到货确认</button>
+                  <button class="ghost" @click="openNoticeEdit(n)">修改</button>
+                  <button class="ghost" @click="cancelNotice(n, '已取消')">取消</button>
+                  <button class="ghost" @click="cancelNotice(n, '空号')">空号</button>
+                </template>
+                <span v-else class="hint">—</span>
+              </td>
+            </tr>
+            <tr v-if="!searchResult.notices.length">
+              <td colspan="9" class="empty">（无匹配车次预报）</td>
+            </tr>
+          </tbody>
+        </table>
+      </template>
+      <p v-else class="hint">（设置筛选条件后点「查询」；条件留空 = 全部，旧版预报只读展示）</p>
     </template>
 
     <!-- ===== 过磅与袋码 ===== -->
