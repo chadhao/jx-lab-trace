@@ -1784,6 +1784,95 @@
 - **状态**：OPEN
 - **最后更新**：2026-10-14 17:10
 
+**★★ mimo 回执 · 2026-10-14 22:21 · `MIMO-NEXT-FIX-07` 交付完毕（D1 数据模型与 spec 双引擎 · D2 批次 API 与三列表口径 · D3 前端六页签 · D4 全链回归 · D5 测试与门禁 · D6 部署/curl/TC）；状态改 `MIMO-DONE`**
+
+★ 本段为 `N-023` 段内**局部追加**，未整体重写 `COLLAB.md`（`check_collab.py` / `check_collab_anchors.py` / `check_md_tables.py` 均绿）。
+
+**1. D1 数据模型与 spec 双引擎**
+
+- ★ 新表 `m_incoming_batch`（`spec/schema.sql` ＋ `migrations/0001_init.sql` 逐字节同步）：唯一三元组 `uk_batch_triple(customer_id, material_id, customer_batch_no)` ＋ `uk_our_batch_no`；表数 **38 → 39**（`migrations_sync_test` / `store_test` 断言、`embed.go`/`migrate.go`/`spec/README`/根 `README.md` 注释同步；`docs/*` 冻结未动，见未做项1）。
+- ★ `b_arrival_notice`：＋`batch_id`（NULL=旧版预报）、**DROP `eta`/`est_bag_count`**（系统无预估）、**`arrive_date` 列保留**、索引 `idx_notice_seq` → `idx_batch_seq(batch_id, seq_no)`。★ **旧库演进**：`migrate.go` 新增 `migrateRecvBatchShape`（information_schema 预检 → 幂等 ALTER；新库 schema 直建新形状 ⇒ 零操作）——服务器实测「新建表 1 · 已存在跳过 38 · **表数 = 39**」，旧行与检测链零删除。
+- ★ 码类 **F=来料批次**（`code-rules.json`：DATE=预填日、SEQ1=HH、SEQ2=分、SEQ3=随机防撞段；含**新示例向量**，`verify_code_rules.py` 6 向量全过；`[ABCDE]→[ABCDEF]` 同步 `codec.go`/解析路径）。`sequence_spaces.车序` 的 scope 注记同步为批次语义。
+- ★★ **spec 三件套 ＋ 判据双引擎（D1.3 的「从未存在的设施」本单新建）**：`spec/enums.json`（批次状态等 4 组）· `spec/forms/`（批次预报表单 ＋ 车次预报表单）· `spec/checks.json`（**28 条判据 / 14 种 kinds**：三元组唯一、关闭后不可预报、L1/L2/L3 口径、旧版排除、链根写入防回归、F 码随机段…）。双引擎 = **Python 侧 `scripts/check_spec.py`** ＋ **Go 侧 `internal/specload`**：各自独立实现全部 kind 求值器，对同一 checks.json 求值；`specload_test` **真跑 Python 侧逐条对账**（id 集与 pass/fail 逐一比对，任一引擎红即红）；未知 kind 两侧都判红 ⇒ 新 kind 必须同批落地。
+
+**2. D2 API（接口清单取自 recv.go 路由注册表 mountReceiving）**
+
+| 端点 | 语义 | 挂点（不新增，51 点冻结） |
+| --- | --- | --- |
+| `POST /api/recv/batches` | 预填批次；三元组重复 ⇒ **400 {error, existing[]}**（含 our_batch_no/customer_batch_no 供跳转） | `recv.notice.create` ALL |
+| `GET /api/recv/batches?status=回货中` | L1 未关闭批次 ＋ 统计三字段 | `recv.notice.create` READ |
+| `GET /api/recv/batches/all` | L3 批次侧多条件 | `recv.notice.create` READ |
+| `POST /api/recv/batches/:id/close` | 手工关闭（**幂等**；留痕 closed_at/by） | **`recv.notice.edit` ALL**（关闭＝预报域管理动作，与取消/修改预报同点同级） |
+| `GET /api/recv/search` | L3 统一查询（批次＋车次；旧版 `legacy=true` 标注） | `recv.notice.create` READ |
+| `POST /api/recv/notices` | 改造：**只收 batch_id＋车辆五字段**；customer/material 由批次带出；批次已关闭 ⇒ 400 | `recv.notice.create` ALL（同旧） |
+| `GET /api/recv/notices?pending=1` | L2：`batch_id IS NOT NULL AND status='预报'`（旧版排除、含所属批次号） | `recv.notice.create` READ（同旧） |
+
+- ★ GET 列表一律 **READ 级**（`recv.notice.create` levels 含 READ，与既有 GET /notices 同点同级；N-021「动作型点不以 ALL 级守 GET」教训）；关闭挂 `recv.notice.edit` 并在此说明选择理由（**零新增权限点**）。
+- ★ 链根红线：新预报创建时 `arrive_date=NULL`，**到货确认时刻写入**（`UPDATE ... SET arrive_date=? WHERE ... IS NULL`；旧版预报保留原值不覆盖）；车码 DATE 段与 `b_truck_lot.arrive_date` 同源；**`POST /arrivals` 机制不变**（27 位车码、写链根）。L1 统计/口径见 D5。
+- ★ `noticeForbiddenKeys`：对 `eta/est_bag_count/arrive_date/customer_id/material_id/biz_type` **显式 400**（含 /arrivals 内联 notice 嵌套对象），非静默忽略（D2「不再接受」）。
+
+**3. D3 前端（`Receiving.vue` 4 → 6 页签）**
+
+- 页签：**未关闭批次(L1) → 未到货车次(L2) → 查询(L3)** ＋ 原 过磅与袋码/标签打印/作废与退车 三页签保留。
+- 批次预报表单（客户/产品/客户批次号 ⇒ `.mono` 展示我方批次号）；**400 的 existing 渲染为可点击按钮**，跳 L3 按我方批次号检索（任务包「列出已有批次供跳转」）。
+- 车次预报表单：**批次下拉（仅回货中，选项含我方/客户批次号＋客户＋产品；前置客户/产品筛选）＋ 车辆信息**，不再有客户/产品/预计到货/到货日/袋数字段（全仓 grep 零残留）。
+- L1 行含统计与「已投 x/y 车」、关闭（confirm 确认、已关闭行不显示按钮）、继续预报（预选批次跳 L2）；L2 含到货确认/修改（行内面板＋必填 reason）/取消；**L3 旧版行 `.tag`「旧版」灰字标注、操作列只读「旧版只读」，不渲染任何按钮**；浅色主题与全局样式惯例沿用（新增样式仅 `.form .radios` 一段，注明 N-023）。
+- `bash -lc "cd web && npm run build"` 成功；`scripts/build.sh` 全量重建，dist 重嵌入库（`index-Ba4dusyg.js` / `index-1XKItYKl.css` 替换旧 hash）。
+
+**4. D5 测试与门禁**
+
+- D5 八类覆盖落点：①三元组唯一（store `TestN023_BatchTripleUnique` ＋ http 形状测试 400 existing 逐字段）②关闭幂等＋关后拒预报＋内联补录同拒（`TestN023_BatchCloseIdempotentAndBlocksForecast`）③L1/L2/L3 口径含旧版排除/标注（`TestN023_L1BatchStats`/`L1_UnclosedOnly`/`L2`/`L3_SearchLegacyFlagged`）④车序批次内递增＋**旧行（batch_id NULL, seq=42）不动**（`TestN023_SeqPerBatchAndLegacyUntouched`）⑤到货确认写链根（`TestN023_ArrivalWritesChainRootDate`：创建空 → 确认写入 → 车码 DATE 段=261009）⑥双引擎（`specload_test` 2 条：28 判据全过 ＋ 跨引擎逐条对账）⑦全链回归（e2e 26/0 ＋ 既有 TC 全绿）⑧形状断言（新/改端点逐字段、含禁字段 400 组）。
+- L1 统计分母口径（写明）：**车次数** = 批次下 status ∈ {预报, 已到货}（已取消/空号不计）；**已到货** = `b_truck_lot` 行数（经 notice 关联）；**已投完** = 有效袋（`status <> '作废'`）> 0 且全部有效袋 `status='已投料'` 的车次（未过磅/无袋、袋全作废均不计）；恒呈漏斗 **已投完 ≤ 已到货 ≤ 车次数**。
+- 门禁 `bash scripts/check_all.sh` ⇒ **必绿 11/11**（双引擎 Python 侧并入 spec 自校验项、Go 侧随 `go test`，保持 11 项计数）；会报 2 项无命中；`gofmt/go build/go vet` 全绿。
+- ★ 服务器全套 TC `bash scripts/run_tc_server.sh`（8 包，`JX_TEST_DB=1`，包目录 cwd）：**243 PASS / 0 FAIL / 0 SKIP 全绿** —— access 9 · audit 3 · codec 6 · config 8 · **httpapi 118**（基线 114 ＋ n023 4）· permission 4 · **specload 2**（双引擎 28 判据，服务器 `/usr/bin/python3` 对账）· **store 93**（基线 88 ＋ n023 5）。
+
+**5. D6 部署与 curl 实测**
+
+- 部署 `bash scripts/deploy-test-server.sh --restart --smoke` ⇒ **`version=399245b` == HEAD、非 -dirty**、dev=true、主服务与 reportd 只绑回环（首版 `dcf2bcc` → 修码后 `a54e89c` → 禁字段终版 `399245b`，均逐次部署复验）。
+- ★ **`.env` 守护（N-020 红线）**：部署前服务器 `.env` 与本地 `.env.deploy` md5 **一致**（`22c81fb88b2776d36a309caaa3991567`，31 行）；部署后复核 **md5 不变** —— 部署链路零改动。
+- ★ curl 全链实测（`127.0.0.1:18080`，receiver 会话，脚本断言式）：**12/12 全过** ——
+
+| 步骤 | 结果 |
+| --- | --- |
+| 预填批次 | 200，`our_batch_no=1FCG…`（27 位 F 码，分钟时间戳＋随机段） |
+| 三元组重复 | **400**，`existing[0].our_batch_no/customer_batch_no` 与首建一致 |
+| 车次预报（仅批次＋车辆） | 200，车序=1、`arrive_date` 为空（确认时写）、响应无 eta/est_bag_count |
+| 禁字段 `est_bag_count/eta/arrive_date/customer_id` | **各 400**（显式拒绝，不静默） |
+| 缺 batch_id | 400 |
+| L1 `?status=回货中` | 200，含本批次＋统计三字段；**关闭后 L1 不再返回该批次** |
+| L2 `?pending=1` | 200，含本批预报＋我方批次号；**旧版（batch_id=0）零混入** |
+| L3 `/search` | 200，批次＋预报齐、`legacy` 标注可用 |
+| 到货确认 | 200，车码 `1A…` 27 位、**链根=确认日 2026-10-14** |
+| 关闭首关 / 重复关 | 200 / **200 幂等**（closed_at 不改写） |
+| 关闭后再预报 | **400**，文案含「已关闭」 |
+
+- ★ e2e 全链回归 `scripts/e2e-fullchain.sh`（D4，服务器真 HTTP）：**26 / 0 全过** —— 预填批次 → 车次预报 → L1/L2/L3 → 到货确认（链根=确认日）→ 关闭＋关后 400 → 过磅袋码 → 取样 → 检测合格 → 生产批/投料/成品 → 出货 → **正反向追溯 has_flow=True** → 报告快照 `RP261014-001` → 报表 has_data=True。飞书事件回调/组织同步（D4）随 TC 既有 `feishu_*` 测试全绿（httpapi 118 内）。
+- 提交：**显式路径、只本地提交**（`3b38be3` D1/D2＋双引擎 · `98f570e` D5 测试 · `dcf2bcc` D3 前端＋dist · `d8e95f4` 跨批次撞码修复 · `a54e89c` F 码随机段修复 · `399245b` 禁字段显式 400 · 本回执另行一提），**不 push**。
+
+**6. ★★ 服务器实测暴露并已修复的三个真实缺陷（静态设计看不到、TC/curl 抓到）**
+
+1. **跨批次撞 `uk_truck_code`（第一轮 TC：store 7 红 / httpapi 18 红）** —— 车码 SEQ1 若取批次内 `seq_no`，则同客户同产品同到货日**跨批次**的两个「01 号车」码完全相同（`1ACG…26101401000000` 实测撞库）。**修复**：车码 SEQ1 回归**码规则冻结定义的空间**（`code-rules#sequence_spaces.车序` = 客户＋原料物料＋到货日），确认时从 `b_truck_lot` 已有码 `MAX(SUBSTRING(code,19,2))+1` 分配，`jxlab.codeseg.{cust}.{mat}` 命名锁串行（锁序恒为 **批次锁 → 码锁 → 事务行锁**，全路径一致无死锁环）；**预报行 seq_no 保持批次内流水**（D1.2）——码内 SEQ1 与预报车序自此是**两个空间**（见口径声明）；袋码 SEQ1 自车码解析派生，车袋前缀一致性不变。
+2. **F 码秒级进位的级联假死（M5/M8/M9 12 例 409，sqlq 连库实证）** —— 原「秒级时间戳 ＋ 冲突时间 +1s 重试」在高频预填（0.4s/批）下，重试写入的**超前时间戳**成为后续占位：超前量级联 022→031（created_at 仅跨 22.277→27.002），5 次 attempt 全撞 ⇒ `ErrSeqBusy`。**修复**：SEQ3 改 **000-999 随机防撞段**（分钟时间戳不变、**原地重掷不前移** ⇒ 无超前占位无级联；同分同客同料撞率 1/1000，`uk_our_batch_no` 最终兜底）；spec/code-rules F 段语义与示例向量同步，判据 **N023-28** 钉住该实现。
+3. **curl 抓到「静默忽略 ≠ 不再接受」** —— `POST /notices` 携带 `eta/est_bag_count` 原被 JSON 解码静默忽略（200），与 D2「不再接受」不符 ⇒ handler 层 `decodeNoticeInput` 对六个禁字段（含 /arrivals 内联 `notice` 嵌套对象）**显式 400 明确文案**，curl 复测转绿。
+
+**7. 口径与设计声明（需用户知悉）**
+
+1. ★ **码内 SEQ1 ≠ 预报行 seq_no**：前者是码规则冻结的「客户＋物料＋到货日」车序（进码、决定唯一性），后者是 D1.2 的批次内流水（展示/跳号）。同批次两者通常同号起步；跨批次同日时码内 SEQ1 会连续而批次内各自从 01 —— 人读行与列表「车序」列可能不同号，**以码规则为准**（冻结件优先，N-006 判例）。
+2. ★ **新批次恒客供（CG）**：`m_incoming_batch.customer_id NOT NULL` ⇒ F 码 BT 恒 CG、新预报 biz_type 恒客供；**ZG 仅存在于旧版预报**（batch_id NULL，行为不变）。
+3. **旧版 pending 预报**按定案不入 L1/L2、L3 只读标注；其到货确认 API 路径仍开放（`POST /arrivals` 行为不变，仅前端不提供旧版入口）。**批次关闭只禁「预报新车次」**（含内联补录），已存在预报的到货确认不受影响（任务包明文）。
+4. **TC 计数口径**：上表 243 为 `run_tc_server.sh` 本次权威输出（`grep '^--- PASS'` 顶层口径，8 包分列可复现）；N-022 回执332 与本次 243 非同一计数面（含子测试与否），历史数字不作对比基线，本次以分包明细为准。
+
+**★ 如实声明的未做项 / 需用户知悉**
+
+1. ★ **`docs/*` 冻结件未同步（按 §6-7 红线不动）**：`docs/01`「共 38 张表」、`docs/02`「T ∈ [ABCDE]」「5 条示例向量」、`docs/03/04` 相关陈述在 N-023 后已过时 —— 以**机读件为准**（N-002/N-006 判例）；`spec/`、`spec/README`、根 `README.md` 已同步（39 张 / 6 向量 / F）。若用户解冻 docs，建议随下一单统一修订。
+2. **`deploy-test-server.sh` 仍会用本地 `.env.deploy` 覆盖服务器 `.env`** —— N-020 根因路径未除（N-020 单独立案）；本单沿用 N-021/N-022 做法：部署前 md5 对齐、部署后 md5 复核（本单两次部署均一致）。
+3. **真浏览器逐帧点验未做**（`docs/05` 本机不跑服务）：D3 以「构建产物含标记 ＋ curl 12/12 ＋ 服务器 TC」承担；如需像素级确认，可在测试服 `dev=true` 下用浏览器走 预填→预报→到货→关闭→L3 旧版标注。
+4. **e2e step10「sysadmin 读业务 ⇒ 期望非 200」打印为 200** —— 该项是历史**打印非断言**（不计分）：`sysadmin × md.customer = NONE` 是种子值，现网 200 来自**用户配置的 perm_change 生效数据**（§8 明示不动），非本单回归；e2e 有效结果 26/0。
+5. **m_incoming_batch 无业务数据回填**（新表无需）；旧库迁移仅结构演进（ALTER），`eta/est_bag_count` 存量值按任务包明文随列删除消失，不备份（任务包§D1.2 授权）。
+
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-14 22:21
+
 ## 5. 已决议
 
 **`N-001` · 批 1（M0 地基）实现 —— `AGREED`（2026-10-09 02:38）**
