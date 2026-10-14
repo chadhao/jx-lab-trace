@@ -4,7 +4,7 @@
   "frozen_at": "2026-10-08",
   "status": "frozen",
   "source_doc": "docs/02-追踪码规则.md",
-  "note": "追踪码机读规格。供代码生成/解析与门禁消费。v1 已冻结，变更须走版本位(V)流程。",
+  "note": "追踪码机读规格。供代码生成/解析与门禁消费。v1 已冻结，变更须走版本位(V)流程。★ N-023（2026-10-14）增补对象类型 F（来料批次）：段结构不变、仅扩 T 字母表（[ABCDE]→[ABCDEF]），不涉 V 位；F 的三段序为创建时刻（时/分/秒）而非链路径（key_rule 的链语义不适用于 F，见 object_types.F.note）。",
 
   "alphabet": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
 
@@ -24,11 +24,11 @@
 
   "segments": [
     { "key": "V", "name": "编码版本", "width": 1, "pattern": "[1-9]", "source": "常量" },
-    { "key": "T", "name": "对象类型", "width": 1, "pattern": "[ABCDE]", "source": "系统" },
+    { "key": "T", "name": "对象类型", "width": 1, "pattern": "[ABCDEF]", "source": "系统" },
     { "key": "BT", "name": "业务类型", "width": 2, "enum": ["CG", "ZG"], "source": "用户选", "note": "CG=客供(受托加工)，ZG=自购" },
     { "key": "CUSTOMER", "name": "客户编号", "width": 4, "pattern": "[0-9]{4}", "source": "主数据", "note": "自购料(ZG)填保留值 0000" },
     { "key": "MATERIAL", "name": "物料编号", "width": 4, "pattern": "[0-9]{4}", "source": "主数据", "note": "原料对象填原料物料；成品对象填成品物料" },
-    { "key": "DATE", "name": "链根日期", "width": 6, "pattern": "[0-9]{6}", "format": "YYMMDD", "source": "系统", "note": "原料链=到货日；成品链=生产批创建日" },
+    { "key": "DATE", "name": "链根日期", "width": 6, "pattern": "[0-9]{6}", "format": "YYMMDD", "source": "系统", "note": "原料链=到货日；成品链=生产批创建日；F(来料批次)=批次预填日" },
     { "key": "SEQ1", "name": "序1·第1层", "width": 2, "pattern": "[0-9]{2}", "source": "系统" },
     { "key": "SEQ2", "name": "序2·第2层", "width": 3, "pattern": "[0-9]{3}", "source": "系统" },
     { "key": "SEQ3", "name": "序3·第3层", "width": 3, "pattern": "[0-9]{3}", "source": "系统" }
@@ -39,10 +39,11 @@
     "B": { "name": "原料吨袋", "chain": "原料链", "depth": 2, "material_slot": "原料物料", "seq1": "车序", "seq2": "袋序", "seq3": "000" },
     "C": { "name": "生产批", "chain": "成品链", "depth": 1, "material_slot": "成品物料(计划产出)", "seq1": "批序", "seq2": "000", "seq3": "000" },
     "D": { "name": "成品批", "chain": "成品链", "depth": 2, "material_slot": "成品物料", "seq1": "来源生产批序", "seq2": "该生产批内第n个成品批", "seq3": "000" },
-    "E": { "name": "成品吨袋", "chain": "成品链", "depth": 3, "material_slot": "成品物料", "seq1": "来源生产批序", "seq2": "成品批序", "seq3": "袋序" }
+    "E": { "name": "成品吨袋", "chain": "成品链", "depth": 3, "material_slot": "成品物料", "seq1": "来源生产批序", "seq2": "成品批序", "seq3": "袋序" },
+    "F": { "name": "来料批次", "chain": "原料链", "depth": 3, "material_slot": "原料物料", "seq1": "时(HH)", "seq2": "分(0MM)", "seq3": "秒(0SS)", "note": "N-023 新增：客户下单预填的来料批次（同客户同产品多车）。三段序承载**创建时刻** YYMMDDHHMMSS（DATE=YYMMDD，SEQ1=HH，SEQ2/SEQ3 分秒各 3 位左补零）而非链路径 —— 批次在链根（到货）之前，不属于 key_rule 的链嵌套语义；天然唯一靠时间戳（uk_our_batch_no 兜底）。" }
   },
 
-  "key_rule": "序段表达的是「从链根到本对象」的完整路径，不是本对象自己的流水。原料链只有 2 层故 SEQ3 恒 000；成品链有 3 层。",
+  "key_rule": "序段表达的是「从链根到本对象」的完整路径，不是本对象自己的流水。原料链只有 2 层故 SEQ3 恒 000；成品链有 3 层。★ 例外：F（来料批次）在链根之前，三段序为创建时刻（见 object_types.F.note）。",
 
   "sequence_spaces": [
     { "key": "车序", "used_by": "A.seq1, B.seq1", "scope": "客户 + 原料物料 + 到货日", "width": 2, "max": 99 },
@@ -83,13 +84,14 @@
     "B": "过磅确认后按实际袋数批量生成（不按预报袋数预打）",
     "C": "建生产批时",
     "D": "生成成品批时",
-    "E": "生成成品袋时"
+    "E": "生成成品袋时",
+    "F": "客户下单预填批次时（创建时刻入码）"
   },
 
   "parse_steps": [
     "长度 != 27 -> 拒绝",
     "V 不在 [1-9] -> 拒绝",
-    "T 不在 [ABCDE] -> 拒绝",
+    "T 不在 [ABCDEF] -> 拒绝",
     "校验位不匹配 -> 拒绝（提示『码可能读错，请重扫』）",
     "按 V 取规则版本、按 T 取布局 -> 切分各段",
     "按 客户+物料+日期+序段 定位对象；命中 -> 打开；未命中 -> 明确提示『格式正确但系统内不存在』"
@@ -135,6 +137,14 @@
       "weighted_sum": 112, "remainder": 4, "check": "4",
       "full": "1ECG00010003261007030020154",
       "human": "1E-CG-0001-0003-261007-03-002-015-4"
+    },
+    {
+      "object": "F", "object_name": "来料批次",
+      "meaning": "客户0001 客供 原料0002 2026-10-14 14:45:30 预填的来料批次（N-023）",
+      "payload": "1FCG0001000226101414045030",
+      "weighted_sum": 130, "remainder": 22, "check": "M",
+      "full": "1FCG0001000226101414045030M",
+      "human": "1F-CG-0001-0002-261014-14-045-030-M"
     }
   ],
 

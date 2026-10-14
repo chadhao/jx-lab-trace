@@ -11,7 +11,7 @@ import (
 
 // ===== 码引擎 · 回归基线 =====
 //
-// ★★ 回归基线 = spec/code-rules.json 的 5 条 sample_vectors（已由
+// ★★ 回归基线 = spec/code-rules.json 的 6 条 sample_vectors（已由
 //	spec/verify_code_rules.py 自校验过，不是草稿）。本文件同时做两件事：
 //	① 逐条比对 weighted_sum / remainder / check / full / human（TC-M3-01）；
 //	② 把实现里的常量与 spec 逐字段交叉核验（防止实现与规格各说各话）。
@@ -89,12 +89,12 @@ func segsOf(t *testing.T, payload string) Segments {
 	}
 }
 
-// TC-M3-01 ★★ 向量回归：5 条示例向量逐条生成，校验位三字段（加权和 /
+// TC-M3-01 ★★ 向量回归：6 条示例向量逐条生成，校验位三字段（加权和 /
 // 余数 / 校验字符）与 full 全部一致；并做解析回读与人读行比对。
 func TestTC_M3_01_VectorRegression(t *testing.T) {
 	spec := loadSpec(t)
-	if len(spec.SampleVectors) != 5 {
-		t.Fatalf("示例向量应为 5 条，实际 %d 条", len(spec.SampleVectors))
+	if len(spec.SampleVectors) != 6 {
+		t.Fatalf("示例向量应为 6 条，实际 %d 条", len(spec.SampleVectors))
 	}
 	for _, v := range spec.SampleVectors {
 		v := v

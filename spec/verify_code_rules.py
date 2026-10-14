@@ -94,7 +94,7 @@ def main():
 
     print("[2b] 不变量：三段序 == 三层嵌套")
     for t, d in spec["object_types"].items():
-        check(t in "ABCDE", "对象类型 %s 合法" % t)
+        check(t in "ABCDEF", "对象类型 %s 合法" % t)
         depth = d["depth"]
         check(depth in (1, 2, 3), "对象类型 %s 的 depth 合法" % t)
         seqs = [d["seq1"], d["seq2"], d["seq3"]]

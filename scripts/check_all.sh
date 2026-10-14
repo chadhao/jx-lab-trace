@@ -101,7 +101,10 @@ green       "COLLAB 协商台账门禁"      "$PY" scripts/check_collab.py
 #   **机检断言**：任何人跑 check_all.sh 都立刻看见红。
 green       "台账我方锚点门禁"          "$PY" scripts/check_collab_anchors.py
 green       "用例↔测试用例覆盖门禁"    "$PY" scripts/check_uc_tc.py
-green       "追踪码规格自校验"         "$PY" spec/verify_code_rules.py
+# ★ 2026-10-14 N-023：spec 判据双引擎的 **Python 侧**（scripts/check_spec.py）并入本项 ——
+#   Go 侧 internal/specload 由上面 `go test ./...` 覆盖，两侧对同一 checks.json 独立求值
+#   （specload_test 还会真跑 Python 侧逐条对账）。合并在一行 ⇒ 必绿总数保持 11（含新判据）。
+green       "spec 机读规格自校验（追踪码 + N-023 判据双引擎 Py 侧）" bash -c "$PY spec/verify_code_rules.py && $PY scripts/check_spec.py"
 green       "权限点规格自校验"         "$PY" spec/verify_permission_points.py
 # ★ 批 1 交付（MIMO-NEXT-BATCH-01 D8 / A9）：权限点「注册 ⇄ 消费」四判据门禁
 #   ① 每个 spec code 至少被代码消费 ② 代码里的权限点标识必须已登记

@@ -57,8 +57,8 @@ func TestTC_M0_Migrate_IdempotentAndSeeded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("统计表数失败: %v", err)
 	}
-	if first != 38 {
-		t.Fatalf("表数应为 38，实际 %d", first)
+	if first != 39 {
+		t.Fatalf("表数应为 39，实际 %d", first)
 	}
 
 	// 第二遍：必须无错、无新表（A2）

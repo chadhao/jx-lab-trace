@@ -4,7 +4,7 @@ package store
 //
 // ★ 车序分配的并发正确性（spec/code-rules.json#rules.concurrent_alloc
 //	= must_serialize_in_transaction，任务包 §6-7）：
-//	b_arrival_notice 的 idx_notice_seq 是 **KEY 不是 UNIQUE**（spec 如此登记），
+//	b_arrival_notice 的 idx_batch_seq 是 **KEY 不是 UNIQUE**（spec 如此登记），
 //	⇒ DB 侧没有唯一索引兜底，「先查最大值再 +1」在并发下必然重号。
 //	本实现用**两道锁**串行化取号，整段读取+插入落在同一事务内：
 //	  ① MySQL 命名锁 GET_LOCK（跨会话的显式串行点，对空表同样有效 ——
@@ -15,6 +15,8 @@ package store
 //	★ 之所以不改 spec 加唯一索引：任务包 §6-7 明示「若认为需要 DB 级唯一约束 ⇒
 //	开议题（不得自改 spec）」—— 本轮按规格实现，取号正确性由自身保证。
 //
+// ★★ N-023 批次化：车序分组维度 = batch_id（批次内递增），锁名 jxlab.seq.batch.{id}；
+//	旧行（batch_id NULL）是存量语义，不参与新取号、seq_no 不动。
 // ★ 空号跳号不回收：MAX 查询**不过滤 status**，已取消 / 空号的行照样计入最大值；
 //	超限（>99）明确报错，绝不自动进位（加宽段位会破坏定长码）。
 // ★ 改预报不改车序：更新语句白名单里**没有 seq_no，也没有 arrive_date**
@@ -178,76 +180,73 @@ func divMilliRound(netMilli, bags int64) int64 {
 	return (2*n + bags) / (2 * bags)
 }
 
-// ===== 预报单（D2）=====
+// ===== 预报单（D2 · N-023 批次化改造）=====
 
-// NoticeInput 是预报登记的入参。
+// NoticeInput 是预报登记的入参（★ N-023：只选批次 + 车辆信息；
+// 客户/产品从批次带出；eta/est_bag_count/arrive_date 输入已删除 —— 系统无预估，
+// 链根日期由到货确认时刻写入）。
 type NoticeInput struct {
-	CustomerID  int64      `json:"customer_id"`
-	MaterialID  int64      `json:"material_id"`
-	VehicleID   int64      `json:"vehicle_id"`
-	PlateNo     string     `json:"plate_no"`
-	Driver      string     `json:"driver"`
-	Phone       string     `json:"phone"`
-	ETA         *time.Time `json:"eta"`
-	EstBagCount int        `json:"est_bag_count"`
-	BizType     string     `json:"biz_type"`
-	// ArriveDate 是链根日期（车序空间的「到货日」，YYYY-MM-DD）。
-	// 分配车序时确定，之后**不可改**（改了会让已分配的车序与码错位）。
-	ArriveDate string `json:"arrive_date"`
+	BatchID   int64  `json:"batch_id"`
+	VehicleID int64  `json:"vehicle_id"`
+	PlateNo   string `json:"plate_no"`
+	Driver    string `json:"driver"`
+	Phone     string `json:"phone"`
 }
 
 // ArrivalNotice 是预报单的读模型。
 type ArrivalNotice struct {
-	ID           int64      `json:"id"`
-	NoticeNo     string     `json:"notice_no"`
-	CustomerID   int64      `json:"customer_id"`
-	CustomerCode string     `json:"customer_code"`
-	CustomerName string     `json:"customer_name"`
-	MaterialID   int64      `json:"material_id"`
-	MaterialCode string     `json:"material_code"`
-	MaterialName string     `json:"material_name"`
-	VehicleID    int64      `json:"vehicle_id"`
-	PlateNo      string     `json:"plate_no"`
-	Driver       string     `json:"driver"`
-	Phone        string     `json:"phone"`
-	ETA          *time.Time `json:"eta"`
-	EstBagCount  int        `json:"est_bag_count"`
-	BizType      string     `json:"biz_type"`
-	SeqNo        int        `json:"seq_no"`
-	ArriveDate   string     `json:"arrive_date"`
-	Status       string     `json:"status"`
-	CreatedAt    *time.Time `json:"created_at"`
-	CreatedBy    string     `json:"created_by"`
+	ID              int64      `json:"id"`
+	NoticeNo        string     `json:"notice_no"`
+	BatchID         int64      `json:"batch_id"` // 0 = 旧版预报（存量行）
+	OurBatchNo      string     `json:"our_batch_no"`
+	CustomerBatchNo string     `json:"customer_batch_no"`
+	CustomerID      int64      `json:"customer_id"`
+	CustomerCode    string     `json:"customer_code"`
+	CustomerName    string     `json:"customer_name"`
+	MaterialID      int64      `json:"material_id"`
+	MaterialCode    string     `json:"material_code"`
+	MaterialName    string     `json:"material_name"`
+	VehicleID       int64      `json:"vehicle_id"`
+	PlateNo         string     `json:"plate_no"`
+	Driver          string     `json:"driver"`
+	Phone           string     `json:"phone"`
+	BizType         string     `json:"biz_type"`
+	SeqNo           int        `json:"seq_no"`
+	ArriveDate      string     `json:"arrive_date"` // 链根日期：到货确认前为 ""
+	Status          string     `json:"status"`
+	Legacy          bool       `json:"legacy"` // batch_id IS NULL ⇒ 旧版预报（L3 标注，不可编辑）
+	CreatedAt       *time.Time `json:"created_at"`
+	CreatedBy       string     `json:"created_by"`
 }
 
 const noticeSelect = `
-SELECT n.id, n.notice_no, n.customer_id, COALESCE(c.code,''), COALESCE(c.name,''),
+SELECT n.id, n.notice_no, COALESCE(n.batch_id, 0), COALESCE(b.our_batch_no,''), COALESCE(b.customer_batch_no,''),
+       n.customer_id, COALESCE(c.code,''), COALESCE(c.name,''),
        n.material_id, COALESCE(m.code,''), COALESCE(m.name,''),
        n.vehicle_id, COALESCE(n.plate_no,''), COALESCE(n.driver,''), COALESCE(n.phone,''),
-       n.eta, n.est_bag_count, n.biz_type, n.seq_no, n.arrive_date, n.status,
+       n.biz_type, n.seq_no, n.arrive_date, n.status,
        n.created_at, n.created_by
 FROM b_arrival_notice n
+LEFT JOIN m_incoming_batch b ON b.id = n.batch_id
 LEFT JOIN m_customer c ON c.id = n.customer_id AND c.is_current = 1
 LEFT JOIN m_material m ON m.id = n.material_id AND m.is_current = 1`
 
 func scanNotice(sc interface{ Scan(...interface{}) error }) (ArrivalNotice, error) {
 	var n ArrivalNotice
-	var eta, arriveDate, createdAt sql.NullTime
-	var seqNo, vehicleID, estCount sql.NullInt64
-	err := sc.Scan(&n.ID, &n.NoticeNo, &n.CustomerID, &n.CustomerCode, &n.CustomerName,
+	var arriveDate, createdAt sql.NullTime
+	var seqNo, vehicleID, batchID sql.NullInt64
+	err := sc.Scan(&n.ID, &n.NoticeNo, &batchID, &n.OurBatchNo, &n.CustomerBatchNo,
+		&n.CustomerID, &n.CustomerCode, &n.CustomerName,
 		&n.MaterialID, &n.MaterialCode, &n.MaterialName,
 		&vehicleID, &n.PlateNo, &n.Driver, &n.Phone,
-		&eta, &estCount, &n.BizType, &seqNo, &arriveDate, &n.Status,
+		&n.BizType, &seqNo, &arriveDate, &n.Status,
 		&createdAt, &n.CreatedBy)
 	if err != nil {
 		return ArrivalNotice{}, err
 	}
 	n.VehicleID = vehicleID.Int64
-	n.EstBagCount = int(estCount.Int64)
-	if eta.Valid {
-		t := eta.Time
-		n.ETA = &t
-	}
+	n.BatchID = batchID.Int64
+	n.Legacy = n.BatchID == 0 // N-023：batch_id NULL = 旧版预报
 	if createdAt.Valid {
 		t := createdAt.Time
 		n.CreatedAt = &t
@@ -261,11 +260,16 @@ func scanNotice(sc interface{ Scan(...interface{}) error }) (ArrivalNotice, erro
 	return n, nil
 }
 
-// ListNotices 列预报单（默认只看未到货的在办单，?all=1 看全部）。
-func (s *Store) ListNotices(ctx context.Context, onlyOpen bool) ([]ArrivalNotice, error) {
+// ListNotices 列预报单。
+//
+//	mode: "" = 全部；"open" = 预报中（含旧版）；"pending" = L2（★ batch_id 非空 且 预报中 —— 旧版预报排除）。
+func (s *Store) ListNotices(ctx context.Context, mode string) ([]ArrivalNotice, error) {
 	q := noticeSelect
-	if onlyOpen {
+	switch mode {
+	case "open":
 		q += ` WHERE n.status = '预报'`
+	case "pending":
+		q += ` WHERE n.batch_id IS NOT NULL AND n.status = '预报'`
 	}
 	q += ` ORDER BY n.id DESC LIMIT 500`
 	rows, err := s.db.QueryContext(ctx, q)
@@ -294,15 +298,86 @@ func (s *Store) GetNotice(ctx context.Context, id int64) (ArrivalNotice, error) 
 	return n, err
 }
 
-// CreateNotice 登记预报 + **分配车序**（D2）。
-//
-// ★ 并发取号：GET_LOCK + 事务内 FOR UPDATE 双重串行（见文件头注释）。
-func (s *Store) CreateNotice(ctx context.Context, in NoticeInput, actor MDActor) (ArrivalNotice, error) {
-	if err := validateNoticeInput(&in); err != nil {
-		return ArrivalNotice{}, err
+// NoticeFilter 是 L3 车次侧查询条件（空 = 不限）。
+type NoticeFilter struct {
+	CustomerID      int64
+	MaterialID      int64
+	CustomerBatchNo string // 经批次 join 过滤
+	OurBatchNo      string
+	Plate           string
+	Status          string
+	LegacyOnly      bool // 只看旧版（batch_id NULL）
+	BatchOnly       bool // 只看批次预报（batch_id 非空）
+	Limit           int
+}
+
+// SearchNotices 是 L3 统一查询的车次侧（★ 旧版预报 batch_id NULL ⇒ legacy=true 可标注）。
+func (s *Store) SearchNotices(ctx context.Context, f NoticeFilter) ([]ArrivalNotice, error) {
+	conds := []string{}
+	args := []interface{}{}
+	if f.CustomerID > 0 {
+		conds = append(conds, "n.customer_id = ?")
+		args = append(args, f.CustomerID)
 	}
-	if _, _, err := s.lookupCodes(ctx, in.CustomerID, in.MaterialID, in.BizType); err != nil {
-		return ArrivalNotice{}, err
+	if f.MaterialID > 0 {
+		conds = append(conds, "n.material_id = ?")
+		args = append(args, f.MaterialID)
+	}
+	if v := strings.TrimSpace(f.CustomerBatchNo); v != "" {
+		conds = append(conds, "b.customer_batch_no LIKE ? ESCAPE '\\'")
+		args = append(args, likeEscape(v))
+	}
+	if v := strings.TrimSpace(f.OurBatchNo); v != "" {
+		conds = append(conds, "b.our_batch_no = ?")
+		args = append(args, strings.ToUpper(v))
+	}
+	if v := strings.TrimSpace(f.Plate); v != "" {
+		conds = append(conds, "n.plate_no LIKE ? ESCAPE '\\'")
+		args = append(args, likeEscape(v))
+	}
+	if v := strings.TrimSpace(f.Status); v != "" {
+		conds = append(conds, "n.status = ?")
+		args = append(args, v)
+	}
+	if f.LegacyOnly {
+		conds = append(conds, "n.batch_id IS NULL")
+	}
+	if f.BatchOnly {
+		conds = append(conds, "n.batch_id IS NOT NULL")
+	}
+	q := noticeSelect
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
+	}
+	limit := f.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	q += fmt.Sprintf(" ORDER BY n.id DESC LIMIT %d", limit)
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("查询预报单失败: %w", err)
+	}
+	defer rows.Close()
+	out := []ArrivalNotice{}
+	for rows.Next() {
+		n, err := scanNotice(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+// CreateNotice 登记预报 + **分配车序**（D2 · N-023：只选批次，车序按批次内递增）。
+//
+// ★ 并发取号：GET_LOCK + 事务内 FOR UPDATE 双重串行（见文件头注释）；
+//
+//	★ 批次已关闭 ⇒ ErrBatchClosed（400）；客户/产品/业务类型从批次带出。
+func (s *Store) CreateNotice(ctx context.Context, in NoticeInput, actor MDActor) (ArrivalNotice, error) {
+	if in.BatchID <= 0 {
+		return ArrivalNotice{}, fmt.Errorf("%w：必须选择来料批次（N-023 起车次预报只选批次）", ErrRecvBadInput)
 	}
 
 	conn, err := s.db.Conn(ctx)
@@ -311,7 +386,7 @@ func (s *Store) CreateNotice(ctx context.Context, in NoticeInput, actor MDActor)
 	}
 	defer conn.Close()
 
-	lock := seqLockName(in.CustomerID, in.MaterialID, in.ArriveDate)
+	lock := seqLockNameBatch(in.BatchID)
 	if err := acquireSeqLock(ctx, conn, lock); err != nil {
 		return ArrivalNotice{}, err
 	}
@@ -323,23 +398,42 @@ func (s *Store) CreateNotice(ctx context.Context, in NoticeInput, actor MDActor)
 	}
 	defer tx.Rollback()
 
-	seq, err := nextSeq(ctx, tx, in.CustomerID, in.MaterialID, in.ArriveDate)
+	// 批次行锁：与 CloseBatch 串行 ⇒ 关闭后不可能再插入该批次的预报。
+	batch, err := scanIncomingBatch(tx.QueryRowContext(ctx, incomingBatchSelect+` WHERE b.id = ? FOR UPDATE`, in.BatchID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ArrivalNotice{}, fmt.Errorf("%w：来料批次 #%d", ErrRecvNotFound, in.BatchID)
+	}
+	if err != nil {
+		return ArrivalNotice{}, fmt.Errorf("读取批次失败: %w", err)
+	}
+	if batch.Status != BatchStatusOpen {
+		return ArrivalNotice{}, fmt.Errorf("%w：%s", ErrBatchClosed, batch.OurBatchNo)
+	}
+	// 客户/产品/业务类型从批次带出（批次必含客户 ⇒ 恒客供 CG）。
+	custCode, matCode, err := lookupCodesTx(ctx, tx, batch.CustomerID, batch.MaterialID, BizTypeCG)
+	if err != nil {
+		return ArrivalNotice{}, err
+	}
+	_ = custCode
+	_ = matCode
+
+	seq, err := nextSeq(ctx, tx, in.BatchID)
 	if err != nil {
 		return ArrivalNotice{}, err
 	}
 
-	noticeNo, err := newNoticeNo(in.ArriveDate, seq)
+	noticeNo, err := newNoticeNo(time.Now().Format("2006-01-02"), seq)
 	if err != nil {
 		return ArrivalNotice{}, err
 	}
 	res, err := tx.ExecContext(ctx, `
 INSERT INTO b_arrival_notice
-  (notice_no, customer_id, material_id, vehicle_id, plate_no, driver, phone, eta,
-   est_bag_count, biz_type, seq_no, arrive_date, status, created_by)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		noticeNo, in.CustomerID, in.MaterialID, nullInt(in.VehicleID),
-		nullStr(in.PlateNo), nullStr(in.Driver), nullStr(in.Phone), in.ETA,
-		in.EstBagCount, in.BizType, seq, in.ArriveDate, NoticeStatusForecast, actor.OpenID)
+  (notice_no, batch_id, customer_id, material_id, vehicle_id, plate_no, driver, phone,
+   biz_type, seq_no, status, created_by)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		noticeNo, in.BatchID, batch.CustomerID, batch.MaterialID, nullInt(in.VehicleID),
+		nullStr(in.PlateNo), nullStr(in.Driver), nullStr(in.Phone),
+		BizTypeCG, seq, NoticeStatusForecast, actor.OpenID)
 	if err != nil {
 		if isDuplicateErr(err) {
 			return ArrivalNotice{}, fmt.Errorf("%w：预报单号冲突，请重试", ErrSeqBusy)
@@ -350,7 +444,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 
 	if err := appendAuditTx(ctx, tx, audit.Entry{
 		Entity: "b_arrival_notice", EntityID: id, Action: "create",
-		NewValue:    fmt.Sprintf("%s 车序%02d %s→%s", noticeNo, seq, in.ArriveDate, NoticeStatusForecast),
+		NewValue:    fmt.Sprintf("%s 批次%s 车序%02d %s→%s", noticeNo, batch.OurBatchNo, seq, batch.CustomerBatchNo, NoticeStatusForecast),
 		ActorOpenID: actor.OpenID, ActorName: actor.Name, ActorRole: actor.Role, IP: actor.IP,
 	}); err != nil {
 		return ArrivalNotice{}, err
@@ -361,24 +455,36 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 	return s.GetNotice(ctx, id)
 }
 
-// NoticePatch 是预报修改的可写字段（★ 白名单里没有 seq_no / arrive_date）。
+// NoticePatch 是预报修改的可写字段。
+//
+// ★ 白名单里没有 seq_no / arrive_date（链根日期与车序、已生成的码绑定，不可改）；
+//
+//	ETA / EstBagCount 字段保留**仅为识别拒绝**（N-023 已删列：系统无预估，收到即 400）；
+//	CustomerID / MaterialID / BizType 仅对旧版预报（batch_id NULL）可改 ——
+//	批次预报的客户/产品由批次带出，改了会与批次脱钩。
 type NoticePatch struct {
 	PlateNo     *string    `json:"plate_no"`
 	Driver      *string    `json:"driver"`
 	Phone       *string    `json:"phone"`
-	ETA         *time.Time `json:"eta"`
-	EstBagCount *int       `json:"est_bag_count"`
+	VehicleID   *int64     `json:"vehicle_id"`
+	ETA         *time.Time `json:"eta"`           // 已删除列：仅用于 400 拒绝
+	EstBagCount *int       `json:"est_bag_count"` // 已删除列：仅用于 400 拒绝
 	CustomerID  *int64     `json:"customer_id"`
 	MaterialID  *int64     `json:"material_id"`
-	VehicleID   *int64     `json:"vehicle_id"`
 	BizType     *string    `json:"biz_type"`
-	ArriveDate  *string    `json:"arrive_date"`
+	ArriveDate  *string    `json:"arrive_date"` // 链根日期：拒绝改
 }
 
 // UpdateNotice 修改预报字段 —— ★ 改预报不改车序（seq_no 一列都不碰）。
 func (s *Store) UpdateNotice(ctx context.Context, id int64, patch NoticePatch, reason string, actor MDActor) (ArrivalNotice, error) {
 	if patch.ArriveDate != nil && strings.TrimSpace(*patch.ArriveDate) != "" {
 		return ArrivalNotice{}, fmt.Errorf("%w：链根日期（到货日）不可修改 —— 车序与已生成的码都绑定在该日", ErrRecvBadInput)
+	}
+	if patch.ETA != nil {
+		return ArrivalNotice{}, fmt.Errorf("%w：预计到货时间（eta）字段已删除（N-023 系统无预估）", ErrRecvBadInput)
+	}
+	if patch.EstBagCount != nil {
+		return ArrivalNotice{}, fmt.Errorf("%w：预计袋数字段已删除（N-023 系统无预估，一切以扫码实际为准）", ErrRecvBadInput)
 	}
 	if strings.TrimSpace(reason) == "" {
 		return ArrivalNotice{}, fmt.Errorf("%w：修改预报必须填写原因", ErrRecvBadInput)
@@ -416,21 +522,14 @@ func (s *Store) UpdateNotice(ctx context.Context, id int64, patch NoticePatch, r
 	if patch.Phone != nil {
 		add("phone", nullStr(*patch.Phone))
 	}
-	if patch.ETA != nil {
-		add("eta", *patch.ETA)
-	}
-	if patch.EstBagCount != nil {
-		if *patch.EstBagCount < 0 {
-			return ArrivalNotice{}, fmt.Errorf("%w：预计袋数不能为负", ErrRecvBadInput)
-		}
-		add("est_bag_count", *patch.EstBagCount)
-	}
 	if patch.VehicleID != nil {
 		add("vehicle_id", nullInt(*patch.VehicleID))
 	}
 	if patch.CustomerID != nil || patch.MaterialID != nil || patch.BizType != nil {
-		// 客户 / 物料 / 业务类型是码的组成段 ⇒ 改之前必须确认车序空间仍成立。
-		// ★ 但 spec 明确「改预报不改车序」⇒ 允许改，车序保持原值。
+		if !cur.Legacy {
+			return ArrivalNotice{}, fmt.Errorf("%w：批次预报的客户/产品由批次带出，不可在预报上单独修改", ErrRecvBadInput)
+		}
+		// 旧版预报（batch_id NULL）保留原编辑语义：改码段前必须确认车序空间仍成立。
 		newCust := cur.CustomerID
 		if patch.CustomerID != nil {
 			newCust = *patch.CustomerID
@@ -633,7 +732,12 @@ func scanTruck(sc interface{ Scan(...interface{}) error }) (TruckLot, error) {
 //
 // ★ 支持无预报直接到货：ArriveInput.Inline 非空时，在**同一事务**里
 //
-//	先补录预报（照常分配车序）再确认。
+//	先补录预报（照常分配批次内车序）再确认。
+//
+// ★★ 链根日期（N-023 红线）：新预报创建时 arrive_date 为 NULL，
+//
+//	**到货确认时刻写入** notice.arrive_date（已有的旧版预报保留原值不覆盖），
+//	车码 DATE 段与 b_truck_lot.arrive_date 均取该链根日期 —— 机制一字不改，只是写入点从表单挪到确认。
 func (s *Store) ConfirmArrival(ctx context.Context, in ArriveInput, actor MDActor) (TruckLot, error) {
 	if in.NoticeID <= 0 && in.Inline == nil {
 		return TruckLot{}, fmt.Errorf("%w：需要 notice_id（已有预报）或 notice（无预报直接到货）", ErrRecvBadInput)
@@ -647,13 +751,13 @@ func (s *Store) ConfirmArrival(ctx context.Context, in ArriveInput, actor MDActo
 	}
 	defer conn.Close()
 
-	// 无预报直接到货 ⇒ 要取车序 ⇒ 同样要拿车序锁
+	// 无预报直接到货 ⇒ 要取车序 ⇒ 同样要拿车序锁（N-023：按批次取号）
 	var lock string
 	if in.Inline != nil {
-		if err := validateNoticeInput(in.Inline); err != nil {
+		if err := validateInlineNotice(in.Inline); err != nil {
 			return TruckLot{}, err
 		}
-		lock = seqLockName(in.Inline.CustomerID, in.Inline.MaterialID, in.Inline.ArriveDate)
+		lock = seqLockNameBatch(in.Inline.BatchID)
 		if err := acquireSeqLock(ctx, conn, lock); err != nil {
 			return TruckLot{}, err
 		}
@@ -668,23 +772,33 @@ func (s *Store) ConfirmArrival(ctx context.Context, in ArriveInput, actor MDActo
 
 	noticeID := in.NoticeID
 	if in.Inline != nil {
-		seq, err := nextSeq(ctx, tx, in.Inline.CustomerID, in.Inline.MaterialID, in.Inline.ArriveDate)
+		// 批次行锁：关闭后不可再补录预报（与 CreateNotice 同一判据）。
+		batch, err := scanIncomingBatch(tx.QueryRowContext(ctx, incomingBatchSelect+` WHERE b.id = ? FOR UPDATE`, in.Inline.BatchID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return TruckLot{}, fmt.Errorf("%w：来料批次 #%d", ErrRecvNotFound, in.Inline.BatchID)
+		}
+		if err != nil {
+			return TruckLot{}, fmt.Errorf("读取批次失败: %w", err)
+		}
+		if batch.Status != BatchStatusOpen {
+			return TruckLot{}, fmt.Errorf("%w：%s", ErrBatchClosed, batch.OurBatchNo)
+		}
+		seq, err := nextSeq(ctx, tx, in.Inline.BatchID)
 		if err != nil {
 			return TruckLot{}, err
 		}
-		noticeNo, err := newNoticeNo(in.Inline.ArriveDate, seq)
+		noticeNo, err := newNoticeNo(time.Now().Format("2006-01-02"), seq)
 		if err != nil {
 			return TruckLot{}, err
 		}
 		res, err := tx.ExecContext(ctx, `
 INSERT INTO b_arrival_notice
-  (notice_no, customer_id, material_id, vehicle_id, plate_no, driver, phone, eta,
-   est_bag_count, biz_type, seq_no, arrive_date, status, created_by)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			noticeNo, in.Inline.CustomerID, in.Inline.MaterialID, nullInt(in.Inline.VehicleID),
+  (notice_no, batch_id, customer_id, material_id, vehicle_id, plate_no, driver, phone,
+   biz_type, seq_no, status, created_by)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			noticeNo, in.Inline.BatchID, batch.CustomerID, batch.MaterialID, nullInt(in.Inline.VehicleID),
 			nullStr(in.Inline.PlateNo), nullStr(in.Inline.Driver), nullStr(in.Inline.Phone),
-			in.Inline.ETA, in.Inline.EstBagCount, in.Inline.BizType, seq,
-			in.Inline.ArriveDate, NoticeStatusForecast, actor.OpenID)
+			BizTypeCG, seq, NoticeStatusForecast, actor.OpenID)
 		if err != nil {
 			return TruckLot{}, fmt.Errorf("补录预报失败: %w", err)
 		}
@@ -704,6 +818,22 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			ErrNoticeState, n.NoticeNo, n.Status)
 	}
 
+	arriveAt := time.Now()
+	if in.ArriveAt != nil && !in.ArriveAt.IsZero() {
+		arriveAt = *in.ArriveAt
+	}
+
+	// ★★ 链根日期：新预报（arrive_date 为空）在确认时刻写入；旧版预报保留原值。
+	arriveDate := n.ArriveDate
+	if arriveDate == "" {
+		arriveDate = arriveAt.Format("2006-01-02")
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE b_arrival_notice SET arrive_date = ? WHERE id = ? AND arrive_date IS NULL`,
+			arriveDate, noticeID); err != nil {
+			return TruckLot{}, fmt.Errorf("写入链根日期失败: %w", err)
+		}
+	}
+
 	custCode, matCode, err := lookupCodesTx(ctx, tx, n.CustomerID, n.MaterialID, n.BizType)
 	if err != nil {
 		return TruckLot{}, err
@@ -715,7 +845,7 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		BT:       n.BizType,
 		Customer: custCode,
 		Material: matCode,
-		Date:     yymmdd(n.ArriveDate),
+		Date:     yymmdd(arriveDate),
 		SEQ1:     pad(n.SeqNo, 2),
 		SEQ2:     codec.Placeholder,
 		SEQ3:     codec.Placeholder,
@@ -724,10 +854,6 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		return TruckLot{}, fmt.Errorf("生成车码失败: %w", err)
 	}
 
-	arriveAt := time.Now()
-	if in.ArriveAt != nil && !in.ArriveAt.IsZero() {
-		arriveAt = *in.ArriveAt
-	}
 	res, err := tx.ExecContext(ctx, `
 INSERT INTO b_truck_lot
   (code, notice_id, customer_id, material_id, vehicle_id, driver, phone, biz_type,
@@ -735,7 +861,7 @@ INSERT INTO b_truck_lot
 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		code, noticeID, n.CustomerID, n.MaterialID, nullInt(n.VehicleID),
 		nullStr(n.Driver), nullStr(n.Phone), n.BizType,
-		n.ArriveDate, arriveAt, TruckStatusPending, nullStr(in.Remark), actor.Name, actor.OpenID)
+		arriveDate, arriveAt, TruckStatusPending, nullStr(in.Remark), actor.Name, actor.OpenID)
 	if err != nil {
 		if isDuplicateErr(err) {
 			return TruckLot{}, fmt.Errorf("%w：车码 %s 已存在", ErrRecvBadInput, code)
@@ -795,28 +921,10 @@ func (s *Store) ListTrucks(ctx context.Context, status string) ([]TruckLot, erro
 
 // ===== 取号与校验的内部工具 =====
 
-func validateNoticeInput(in *NoticeInput) error {
-	in.BizType = strings.ToUpper(strings.TrimSpace(in.BizType))
-	if in.BizType == "" {
-		in.BizType = BizTypeCG
-	}
-	if in.BizType != BizTypeCG && in.BizType != BizTypeZG {
-		return fmt.Errorf("%w：biz_type 只允许 CG / ZG", ErrRecvBadInput)
-	}
-	if in.BizType == BizTypeCG && in.CustomerID <= 0 {
-		return fmt.Errorf("%w：客供（CG）必须选择客户", ErrRecvBadInput)
-	}
-	if in.BizType == BizTypeZG && in.CustomerID < 0 {
-		return fmt.Errorf("%w：customer_id 不能为负", ErrRecvBadInput)
-	}
-	if in.MaterialID <= 0 {
-		return fmt.Errorf("%w：必须选择原料物料", ErrRecvBadInput)
-	}
-	if in.EstBagCount < 0 {
-		return fmt.Errorf("%w：预计袋数不能为负", ErrRecvBadInput)
-	}
-	if _, err := time.Parse("2006-01-02", in.ArriveDate); err != nil {
-		return fmt.Errorf("%w：arrive_date 必须是 YYYY-MM-DD（链根日期 = 车序空间的到货日）", ErrRecvBadInput)
+// validateInlineNotice 校验「无预报直接到货」的入参（N-023：只选批次 + 车辆信息）。
+func validateInlineNotice(in *NoticeInput) error {
+	if in.BatchID <= 0 {
+		return fmt.Errorf("%w：必须选择来料批次（N-023 起到货预报只选批次）", ErrRecvBadInput)
 	}
 	return nil
 }
@@ -873,15 +981,16 @@ func lookupCodesTx(ctx context.Context, tx *sql.Tx, customerID, materialID int64
 	return lookupCodesCtx(ctx, tx, customerID, materialID, bizType)
 }
 
-// nextSeq 取下一个车序（★ 必须在持锁的事务内调用）。
-func nextSeq(ctx context.Context, tx *sql.Tx, customerID, materialID int64, arriveDate string) (int, error) {
+// nextSeq 取批次内下一个车序（★ 必须在持锁的事务内调用；N-023：分组维度 = batch_id）。
+// 旧行（batch_id NULL）不参与新取号 —— 它们的 seq_no 是存量语义，保持不动。
+func nextSeq(ctx context.Context, tx *sql.Tx, batchID int64) (int, error) {
 	var max sql.NullInt64
-	// 当前读：锁住该「客户+物料+到货日」范围内已有的最大行
+	// 当前读：锁住该批次范围内已有的最大行
 	err := tx.QueryRowContext(ctx, `
 SELECT seq_no FROM b_arrival_notice
-WHERE customer_id = ? AND material_id = ? AND arrive_date = ?
+WHERE batch_id = ?
 ORDER BY seq_no DESC LIMIT 1 FOR UPDATE`,
-		customerID, materialID, arriveDate).Scan(&max)
+		batchID).Scan(&max)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("读取车序失败: %w", err)
 	}
@@ -895,9 +1004,9 @@ ORDER BY seq_no DESC LIMIT 1 FOR UPDATE`,
 	return next, nil
 }
 
-// seqLockName 生成车序空间对应的 MySQL 命名锁名（≤64 字符）。
-func seqLockName(customerID, materialID int64, arriveDate string) string {
-	return fmt.Sprintf("jxlab.seq.%d.%d.%s", customerID, materialID, arriveDate)
+// seqLockNameBatch 生成批次车序空间对应的 MySQL 命名锁名（≤64 字符）。
+func seqLockNameBatch(batchID int64) string {
+	return fmt.Sprintf("jxlab.seq.batch.%d", batchID)
 }
 
 // acquireSeqLock 在**本会话**上取命名锁（超时 ⇒ 明确报错，不静默重试）。

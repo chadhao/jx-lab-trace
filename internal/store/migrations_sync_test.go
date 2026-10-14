@@ -43,8 +43,8 @@ func TestSpecFilesAreParseable(t *testing.T) {
 			creates++
 		}
 	}
-	if creates != 38 {
-		t.Fatalf("spec/schema.sql 应切出 38 条 CREATE TABLE，实际 %d（切分器或 spec 变了）", creates)
+	if creates != 39 {
+		t.Fatalf("spec/schema.sql 应切出 39 条 CREATE TABLE，实际 %d（切分器或 spec 变了）", creates)
 	}
 	// 每条语句都必须以可执行文本收尾（不吞掉半截）
 	for i, s := range stmts {

@@ -35,6 +35,13 @@ import (
 //
 //	scripts/check_perm_registry.py 判据③ 要求实参能静态核验成已登记的权限点常量，
 //	传变量会被判「无法静态核验」⇒ 假红。宁可写长，不可写活。
+//
+// ★ N-023 权限（不新增权限点，沿用收货域）：
+//
+//	批次预填/列表/查询 = 预报域动作 ⇒ recv.notice.create（ALL / READ）
+//	批次关闭 = 预报域管理动作（决定该批次能否继续预报）⇒ recv.notice.edit（ALL）
+//	★ GET 列表一律 READ 级（N-021 教训：recv.notice.create 自带 READ 级别，
+//	  与既有 GET /notices 同点同级 —— 动作型权限点不以 ALL 级守 GET 列表）。
 func (s *Server) mountReceiving(e *echo.Echo) {
 	g := e.Group("/api/recv")
 
@@ -47,6 +54,18 @@ func (s *Server) mountReceiving(e *echo.Echo) {
 		access.RequirePerm(s.Store, permission.RecvNoticeEdit, access.LevelAll))
 	g.PATCH("/notices/:id/status", s.handleNoticeStatus,
 		access.RequirePerm(s.Store, permission.RecvNoticeEdit, access.LevelAll))
+
+	// —— N-023 来料批次（D2）——
+	g.POST("/batches", s.handleCreateIncomingBatch,
+		access.RequirePerm(s.Store, permission.RecvNoticeCreate, access.LevelAll))
+	g.GET("/batches", s.handleListIncomingBatches,
+		access.RequirePerm(s.Store, permission.RecvNoticeCreate, access.LevelRead))
+	g.GET("/batches/all", s.handleSearchIncomingBatches,
+		access.RequirePerm(s.Store, permission.RecvNoticeCreate, access.LevelRead))
+	g.POST("/batches/:id/close", s.handleCloseIncomingBatch,
+		access.RequirePerm(s.Store, permission.RecvNoticeEdit, access.LevelAll))
+	g.GET("/search", s.handleSearch,
+		access.RequirePerm(s.Store, permission.RecvNoticeCreate, access.LevelRead))
 
 	// —— D3 到货确认 ——
 	g.POST("/arrivals", s.handleConfirmArrival,
@@ -89,9 +108,17 @@ func (s *Server) mountReceiving(e *echo.Echo) {
 
 // ---- D2 预报 ----
 
+// handleListNotices 预报列表：?open=1 预报中（含旧版）；?pending=1 = L2
+// （★ batch_id 非空 且 预报中 —— 旧版预报排除；含所属批次号）。
 func (s *Server) handleListNotices(c echo.Context) error {
-	onlyOpen := c.QueryParam("open") == "1"
-	rows, err := s.Store.ListNotices(c.Request().Context(), onlyOpen)
+	mode := ""
+	switch {
+	case c.QueryParam("pending") == "1":
+		mode = "pending"
+	case c.QueryParam("open") == "1":
+		mode = "open"
+	}
+	rows, err := s.Store.ListNotices(c.Request().Context(), mode)
 	if err != nil {
 		return recvErr(err)
 	}
@@ -156,6 +183,135 @@ func (s *Server) handleNoticeStatus(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"changed": true, "row": row,
 	})
+}
+
+// ---- N-023 来料批次 ----
+
+// handleCreateIncomingBatch 预填批次。三元组重复 ⇒ 400 且响应体含已有批次（供跳转）。
+func (s *Server) handleCreateIncomingBatch(c echo.Context) error {
+	var in store.BatchInput
+	if err := decodeBody(c, &in); err != nil {
+		return err
+	}
+	row, err := s.Store.CreateBatch(c.Request().Context(), in, mdActor(c))
+	if err != nil {
+		var dup *store.BatchDuplicateError
+		if errors.As(err, &dup) {
+			return echo.NewHTTPError(http.StatusBadRequest, map[string]interface{}{
+				"error":    err.Error(),
+				"existing": dup.Existing,
+			})
+		}
+		return recvErr(err)
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"created": true, "row": row,
+	})
+}
+
+// handleListIncomingBatches L1：未关闭批次列表（?status=回货中 含每批次统计）。
+func (s *Server) handleListIncomingBatches(c echo.Context) error {
+	rows, err := s.Store.ListBatches(c.Request().Context(), c.QueryParam("status"))
+	if err != nil {
+		return recvErr(err)
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"count": len(rows), "rows": rows,
+	})
+}
+
+// handleSearchIncomingBatches L3 批次侧：多条件筛选。
+func (s *Server) handleSearchIncomingBatches(c echo.Context) error {
+	f := store.BatchFilter{
+		CustomerID:      qInt64(c, "customer_id"),
+		MaterialID:      qInt64(c, "material_id"),
+		CustomerBatchNo: c.QueryParam("customer_batch_no"),
+		OurBatchNo:      c.QueryParam("our_batch_no"),
+		Status:          c.QueryParam("status"),
+		Limit:           queryInt(c, "limit"),
+	}
+	rows, err := s.Store.ListBatchesAll(c.Request().Context(), f)
+	if err != nil {
+		return recvErr(err)
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"count": len(rows), "rows": rows,
+	})
+}
+
+// handleCloseIncomingBatch 手工关闭批次（幂等）。
+func (s *Server) handleCloseIncomingBatch(c echo.Context) error {
+	id, err := pathID(c)
+	if err != nil {
+		return err
+	}
+	row, err := s.Store.CloseBatch(c.Request().Context(), id, mdActor(c))
+	if err != nil {
+		return recvErr(err)
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"closed": true, "row": row,
+	})
+}
+
+// handleSearch L3 统一查询：批次 + 车次预报（含旧版预报标注「旧版」）。
+//
+//	筛选：customer_id / material_id / customer_batch_no / our_batch_no /
+//	batch_status / notice_status / plate / legacy(1=只看旧版, 0=只看批次预报, 缺省=全部)
+func (s *Server) handleSearch(c echo.Context) error {
+	bf := store.BatchFilter{
+		CustomerID:      qInt64(c, "customer_id"),
+		MaterialID:      qInt64(c, "material_id"),
+		CustomerBatchNo: c.QueryParam("customer_batch_no"),
+		OurBatchNo:      c.QueryParam("our_batch_no"),
+		Status:          c.QueryParam("batch_status"),
+		Limit:           queryInt(c, "limit"),
+	}
+	batches, err := s.Store.ListBatchesAll(c.Request().Context(), bf)
+	if err != nil {
+		return recvErr(err)
+	}
+	nf := store.NoticeFilter{
+		CustomerID:      bf.CustomerID,
+		MaterialID:      bf.MaterialID,
+		CustomerBatchNo: bf.CustomerBatchNo,
+		OurBatchNo:      bf.OurBatchNo,
+		Plate:           c.QueryParam("plate"),
+		Status:          c.QueryParam("notice_status"),
+		Limit:           bf.Limit,
+	}
+	switch c.QueryParam("legacy") {
+	case "1":
+		nf.LegacyOnly = true
+	case "0":
+		nf.BatchOnly = true
+	}
+	notices, err := s.Store.SearchNotices(c.Request().Context(), nf)
+	if err != nil {
+		return recvErr(err)
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"batch_count": len(batches), "batches": batches,
+		"notice_count": len(notices), "notices": notices,
+	})
+}
+
+// qInt64 包装 md.go 的 queryInt64：解析失败/负数 ⇒ 0（筛选语义「不限」）。
+func qInt64(c echo.Context, key string) int64 {
+	v, err := queryInt64(c, key)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// queryInt 解析查询串整数（失败/缺省 = 0）。
+func queryInt(c echo.Context, key string) int {
+	v, _ := strconv.Atoi(c.QueryParam(key))
+	if v < 0 {
+		return 0
+	}
+	return v
 }
 
 // ---- D3 到货确认（支持无预报直接到货）----
@@ -386,6 +542,8 @@ func recvErr(err error) error {
 	case errors.Is(err, store.ErrRecvBadInput),
 		errors.Is(err, store.ErrVoidReason),
 		errors.Is(err, store.ErrReprintReason),
+		errors.Is(err, store.ErrBatchClosed), // N-023：关闭后预报新车次 ⇒ 400
+		errors.Is(err, store.ErrBatchDuplicate),
 		errors.Is(err, codec.ErrNotOurs),
 		errors.Is(err, codec.ErrChecksum),
 		errors.Is(err, codec.ErrBadInput),

@@ -1,0 +1,212 @@
+{
+  "spec": "jx-lab-trace.spec-checks",
+  "spec_version": 1,
+  "created_at": "2026-10-14",
+  "note": "N-023 判据清单（机读）。双引擎：internal/specload（Go）与 scripts/check_spec.py（Python）各自独立实现 kinds 求值器并对同一份文件求值 —— 任一引擎不支持某 kind 或任一判据不过 ⇒ 该引擎失败（门禁红）。kind 全集两引擎必须一致，新增 kind 必须两侧同批落地。",
+  "kinds": [
+    "table_count",
+    "schema_table_exists",
+    "schema_unique_key",
+    "schema_column_present",
+    "schema_column_absent",
+    "schema_index_present",
+    "schema_index_absent",
+    "code_rules_object_type",
+    "enum_values",
+    "form_fields_present",
+    "form_fields_absent",
+    "source_regex",
+    "source_absent_regex",
+    "route_registered"
+  ],
+  "checks": [
+    {
+      "id": "N023-01",
+      "kind": "table_count",
+      "expect": 39,
+      "desc": "spec/schema.sql 共 39 张表（N-023 新增 m_incoming_batch）"
+    },
+    {
+      "id": "N023-02",
+      "kind": "schema_table_exists",
+      "table": "m_incoming_batch",
+      "desc": "来料批次表存在"
+    },
+    {
+      "id": "N023-03",
+      "kind": "schema_unique_key",
+      "table": "m_incoming_batch",
+      "columns": ["customer_id", "material_id", "customer_batch_no"],
+      "desc": "批次三元组唯一（重复预填报 400 并列出已有批次）"
+    },
+    {
+      "id": "N023-04",
+      "kind": "schema_unique_key",
+      "table": "m_incoming_batch",
+      "columns": ["our_batch_no"],
+      "desc": "我方批次号唯一（F 码时间戳兜底）"
+    },
+    {
+      "id": "N023-05",
+      "kind": "schema_column_present",
+      "table": "b_arrival_notice",
+      "column": "batch_id",
+      "desc": "预报挂批次列存在（NULL = 旧版预报）"
+    },
+    {
+      "id": "N023-06",
+      "kind": "schema_column_absent",
+      "table": "b_arrival_notice",
+      "column": "eta",
+      "desc": "eta 列已删（系统无预估）"
+    },
+    {
+      "id": "N023-07",
+      "kind": "schema_column_absent",
+      "table": "b_arrival_notice",
+      "column": "est_bag_count",
+      "desc": "est_bag_count 列已删（系统无预估）"
+    },
+    {
+      "id": "N023-08",
+      "kind": "schema_column_present",
+      "table": "b_arrival_notice",
+      "column": "arrive_date",
+      "desc": "arrive_date 链根日期列保留（到货确认写入）"
+    },
+    {
+      "id": "N023-09",
+      "kind": "schema_index_present",
+      "table": "b_arrival_notice",
+      "index": "idx_batch_seq",
+      "columns": ["batch_id", "seq_no"],
+      "desc": "车序索引改按批次 (batch_id, seq_no)"
+    },
+    {
+      "id": "N023-10",
+      "kind": "schema_index_absent",
+      "table": "b_arrival_notice",
+      "index": "idx_notice_seq",
+      "desc": "旧车序索引 (customer, material, arrive_date, seq) 已移除"
+    },
+    {
+      "id": "N023-11",
+      "kind": "code_rules_object_type",
+      "letter": "F",
+      "name": "来料批次",
+      "desc": "code-rules 新码类 F（含时间戳，生成时机=批次预填时）"
+    },
+    {
+      "id": "N023-12",
+      "kind": "enum_values",
+      "enum": "incoming_batch_status",
+      "values": ["回货中", "已关闭"],
+      "desc": "批次状态枚举 = 回货中 / 已关闭"
+    },
+    {
+      "id": "N023-13",
+      "kind": "form_fields_present",
+      "form": "recv_notice_forecast",
+      "fields": ["batch_id", "plate_no", "driver", "phone"],
+      "desc": "车次预报表单：批次选择 + 车辆信息"
+    },
+    {
+      "id": "N023-14",
+      "kind": "form_fields_absent",
+      "form": "recv_notice_forecast",
+      "fields": ["eta", "est_bag_count", "arrive_date", "customer_id", "material_id"],
+      "desc": "车次预报表单无 eta/est_bag_count/arrive_date/客户/产品输入项"
+    },
+    {
+      "id": "N023-15",
+      "kind": "form_fields_present",
+      "form": "recv_batch_prefill",
+      "fields": ["customer_id", "material_id", "customer_batch_no"],
+      "desc": "批次预报表单：客户/产品/客户批次号"
+    },
+    {
+      "id": "N023-16",
+      "kind": "route_registered",
+      "method": "POST",
+      "path": "/api/recv/batches",
+      "desc": "路由：预填批次"
+    },
+    {
+      "id": "N023-17",
+      "kind": "route_registered",
+      "method": "GET",
+      "path": "/api/recv/batches",
+      "desc": "路由：L1 未关闭批次"
+    },
+    {
+      "id": "N023-18",
+      "kind": "route_registered",
+      "method": "POST",
+      "path": "/api/recv/batches/:id/close",
+      "desc": "路由：手工关闭批次（幂等）"
+    },
+    {
+      "id": "N023-19",
+      "kind": "route_registered",
+      "method": "GET",
+      "path": "/api/recv/search",
+      "desc": "路由：L3 统一查询"
+    },
+    {
+      "id": "N023-20",
+      "kind": "source_regex",
+      "file": "internal/httpapi/recv.go",
+      "pattern": "pending.*==.*\"1\"",
+      "desc": "L2 口径：GET /notices?pending=1 参数被解析"
+    },
+    {
+      "id": "N023-21",
+      "kind": "source_regex",
+      "file": "internal/store/receiving.go",
+      "pattern": "batch_id IS NOT NULL AND n\\.status = '预报'",
+      "desc": "L2 口径：旧版预报（batch_id NULL）被排除出 L2"
+    },
+    {
+      "id": "N023-22",
+      "kind": "source_regex",
+      "file": "internal/store/receiving.go",
+      "pattern": "UPDATE b_arrival_notice SET arrive_date = \\?",
+      "desc": "链根日期仍由到货确认写入（防回归）"
+    },
+    {
+      "id": "N023-23",
+      "kind": "source_regex",
+      "file": "internal/store/receiving.go",
+      "pattern": "ErrBatchClosed",
+      "desc": "关闭后不可预报新车次（CreateNotice/补录预报守卫）"
+    },
+    {
+      "id": "N023-24",
+      "kind": "source_regex",
+      "file": "internal/store/receiving.go",
+      "pattern": "WHERE batch_id = \\?",
+      "desc": "车序取号分组维度 = batch_id（批次内递增）"
+    },
+    {
+      "id": "N023-25",
+      "kind": "source_regex",
+      "file": "internal/store/batch.go",
+      "pattern": "ErrBatchDuplicate",
+      "desc": "三元组重复预填返回带已有批次的专用错误"
+    },
+    {
+      "id": "N023-26",
+      "kind": "source_regex",
+      "file": "internal/store/batch.go",
+      "pattern": "CASE WHEN g\\.status <> '作废' THEN 1 ELSE 0 END",
+      "desc": "L1 投料进度分母 = 有效袋（作废不计）"
+    },
+    {
+      "id": "N023-27",
+      "kind": "source_absent_regex",
+      "file": "internal/store/receiving.go",
+      "pattern": "EstBagCount int\\s+`json:\"est_bag_count\"`",
+      "desc": "预报读模型已无 est_bag_count 输出字段"
+    }
+  ]
+}

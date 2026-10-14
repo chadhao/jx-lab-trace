@@ -15,7 +15,7 @@ import (
 //   —— 对 s_audit_log 的 UPDATE / DELETE 在非测试源码与迁移脚本里一律不许出现；
 //   自证方式：往临时目录里塞一条 `UPDATE s_audit_log ...` 的变异文件，
 //   同一套扫描器必须当场抓出（证明判据有牙齿，不是“看起来在查”）。
-//   ★ 不覆盖的形态：绕过应用直连库的人肉篡改 —— schema 已冻结为 38 张表、
+//   ★ 不覆盖的形态：绕过应用直连库的人肉篡改 —— schema 已冻结为 39 张表、
 //   且 s_audit_log 无哈希列，M0 无法在不改表的前提下检测；如需该能力须开议题。
 
 var rewriteAuditRe = regexp.MustCompile(`(?is)\b(?:UPDATE\s+|DELETE\s+FROM\s+)[^;\n]*\bs_audit_log\b`)

@@ -1,0 +1,19 @@
+{
+  "form": "recv_notice_forecast",
+  "title": "车次预报表单",
+  "module": "收货",
+  "note": "N-023 改造：只选批次（筛客户+产品，仅回货中）+ 车辆信息；不再填客户/产品/预计到货时间/到货日/袋数预估（系统无预估，一切以扫码实际为准；到货日=到货确认时刻写入）。",
+  "submit": "POST /api/recv/notices",
+  "fields": [
+    { "key": "batch_id", "label": "来料批次", "type": "ref", "ref": "m_incoming_batch", "required": true, "filter": "status=回货中" },
+    { "key": "vehicle_id", "label": "车辆", "type": "ref", "ref": "m_vehicle", "required": false },
+    { "key": "plate_no", "label": "车牌", "type": "text", "required": false, "max": 32 },
+    { "key": "driver", "label": "司机", "type": "text", "required": false, "max": 64 },
+    { "key": "phone", "label": "电话", "type": "text", "required": false, "max": 32 }
+  ],
+  "forbidden_fields": ["eta", "est_bag_count", "arrive_date", "customer_id", "material_id"],
+  "error_cases": [
+    { "when": "batch_id 缺失或批次不存在", "code": 400 },
+    { "when": "批次已关闭", "code": 400, "body_hint": "批次已关闭，不能再预报新车次" }
+  ]
+}

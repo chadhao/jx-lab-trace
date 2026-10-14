@@ -5,7 +5,7 @@ package migrations
 
 import _ "embed"
 
-// SchemaSQL 是 38 张表的建表 DDL（源：spec/schema.sql）。
+// SchemaSQL 是 39 张表的建表 DDL（源：spec/schema.sql）。
 //
 //go:embed 0001_init.sql
 var SchemaSQL []byte

@@ -2,7 +2,7 @@
 //
 // ★★ 唯一真源：spec/code-rules.json（status: frozen, v1）。
 //	本文件里的常量与它逐条对齐，由 TestTC_M3_01_* 读取 ../../spec/code-rules.json
-//	交叉核验（段序 / 段宽 / 字母表 / 校验算法 / 人读行分组 / 5 条示例向量）。
+//	交叉核验（段序 / 段宽 / 字母表 / 校验算法 / 人读行分组 / 6 条示例向量）。
 // ★ **纯函数**：不连库、不起服务即可断言（任务包 D1）。
 //
 // ★ 「格式正确但系统内不存在」不在这里判定 —— 本包只回答「是不是本系统的码、
@@ -43,7 +43,7 @@ var (
 // Segments 是 26 位裸串的段视图（spec#segments 的结构化表达）。
 type Segments struct {
 	V        string // 编码版本      1 位 [1-9]
-	T        string // 对象类型      1 位 [ABCDE]
+	T        string // 对象类型      1 位 [ABCDEF]
 	BT       string // 业务类型      2 位 CG/ZG
 	Customer string // 客户编号      4 位（ZG 填 0000）
 	Material string // 物料编号      4 位
@@ -80,6 +80,9 @@ var objectTypes = map[byte]ObjectSpec{
 	'C': {Type: 'C', Name: "生产批", Chain: "成品链", Depth: 1, MaterialSlot: "成品物料(计划产出)", Seq1: "批序", Seq2: "000", Seq3: "000"},
 	'D': {Type: 'D', Name: "成品批", Chain: "成品链", Depth: 2, MaterialSlot: "成品物料", Seq1: "来源生产批序", Seq2: "该生产批内第n个成品批", Seq3: "000"},
 	'E': {Type: 'E', Name: "成品吨袋", Chain: "成品链", Depth: 3, MaterialSlot: "成品物料", Seq1: "来源生产批序", Seq2: "成品批序", Seq3: "袋序"},
+	// ★ N-023 来料批次：三段序承载**创建时刻**（时/分/秒）而非链路径 ——
+	//	批次在链根之前（客户下单预填），不属于「从链根到本对象」的嵌套语义（见 spec#object_types.F.note）。
+	'F': {Type: 'F', Name: "来料批次", Chain: "原料链", Depth: 3, MaterialSlot: "原料物料", Seq1: "时(HH)", Seq2: "分(0MM)", Seq3: "秒(0SS)"},
 }
 
 // ObjectOf 返回对象类型的层级语义；未知类型返回 false。
@@ -152,7 +155,7 @@ func WeightedSum(payload string) (int, error) {
 //
 //	长度 != 27        → ErrNotOurs
 //	V 不在 [1-9]      → ErrNotOurs
-//	T 不在 [ABCDE]    → ErrNotOurs
+//	T 不在 [ABCDEF]   → ErrNotOurs
 //	校验位不匹配       → ErrChecksum（★ 提示「请重扫」）
 //	段值不合法         → ErrNotOurs
 //	通过              → 结构化结果（★ 「系统内是否存在」由调用方查库判定）
@@ -166,7 +169,7 @@ func Parse(full string) (Parsed, error) {
 		return Parsed{}, fmt.Errorf("%w：版本位 %q 不在 [1-9]", ErrNotOurs, full[0])
 	}
 	if _, ok := objectTypes[full[1]]; !ok {
-		return Parsed{}, fmt.Errorf("%w：对象类型 %q 不在 [ABCDE]", ErrNotOurs, full[1])
+		return Parsed{}, fmt.Errorf("%w：对象类型 %q 不在 [ABCDEF]", ErrNotOurs, full[1])
 	}
 	want, err := CheckChar(payload)
 	if err != nil {
@@ -266,11 +269,11 @@ func (s Segments) Validate() error {
 		return fmt.Errorf("版本位 %q 不在 [1-9]", s.V)
 	}
 	if len(s.T) != 1 {
-		return fmt.Errorf("对象类型 %q 不在 [ABCDE]", s.T)
+		return fmt.Errorf("对象类型 %q 不在 [ABCDEF]", s.T)
 	}
 	spec, ok := objectTypes[s.T[0]]
 	if !ok {
-		return fmt.Errorf("对象类型 %q 不在 [ABCDE]", s.T)
+		return fmt.Errorf("对象类型 %q 不在 [ABCDEF]", s.T)
 	}
 	if s.BT != "CG" && s.BT != "ZG" {
 		return fmt.Errorf("业务类型 %q 不在 [CG,ZG]", s.BT)

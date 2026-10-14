@@ -45,14 +45,14 @@ var createTableRe = regexp.MustCompile(`(?is)^\s*CREATE\s+TABLE\s+([A-Za-z0-9_]+
 
 // Migrate 执行**可重复执行（幂等）**的迁移：
 //
-//	① spec/schema.sql 的 38 张表：逐条判断 information_schema，已存在则跳过；
+//	① spec/schema.sql 的 39 张表：逐条判断 information_schema，已存在则跳过；
 //	② 权限点字典按**代码**（permission.All）upsert —— 后台不可增删，
 //	   库中多出的 code 属于「字典外假权限」，删除；
 //	③ 角色（spec 6 个）upsert；
 //	④ 授权种子只**补齐缺失行**（INSERT IGNORE）—— 后台已改过的 level 不被覆盖；
 //	⑤ JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID 存在时引导首个系统管理员（防锁死兜底）。
 //
-// 连跑两次：第二次 TablesCreated=0、无报错、表数稳定 38（A2）。
+// 连跑两次：第二次 TablesCreated=0、无报错、表数稳定 39（A2）。
 func (s *Store) Migrate(ctx context.Context, bootstrapOpenID string) (MigrateResult, error) {
 	var res MigrateResult
 
@@ -85,6 +85,13 @@ func (s *Store) Migrate(ctx context.Context, bootstrapOpenID string) (MigrateRes
 		if m != nil {
 			res.TablesCreated++
 		}
+	}
+
+	// ①.5 N-023 结构演进：已存在的 b_arrival_notice 走幂等 ALTER
+	//   （CREATE TABLE 路径只对**新库**生效；旧库该表已存在 ⇒ 上面的循环会整句跳过）。
+	//   新库由 schema.sql 直接建出新形状 ⇒ 下面每一步的前置检查全部落空 ⇒ 零操作。
+	if err := migrateRecvBatchShape(ctx, tx); err != nil {
+		return res, err
 	}
 
 	var spec permSpec
@@ -173,7 +180,7 @@ func (s *Store) Migrate(ctx context.Context, bootstrapOpenID string) (MigrateRes
 	return res, nil
 }
 
-// TableCount 返回当前库的表数（A2：幂等后应稳定 = 38）。
+// TableCount 返回当前库的表数（A2：幂等后应稳定 = 39）。
 func (s *Store) TableCount(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
@@ -197,6 +204,79 @@ func tableExists(ctx context.Context, tx *sql.Tx, name string) (bool, error) {
 		`SELECT COUNT(*) FROM information_schema.tables
 		  WHERE table_schema = DATABASE() AND table_name = ?`, name).Scan(&n)
 	return n > 0, err
+}
+
+// migrateRecvBatchShape 幂等地把**已存在**的 b_arrival_notice 演进到 N-023 形状：
+//
+//	＋ batch_id 列（旧行 NULL = 旧版预报）
+//	− eta / est_bag_count 列（系统无预估，值随列删除自然消失）
+//	− idx_notice_seq → ＋ idx_batch_seq(batch_id, seq_no)
+//
+// ★ 每一步都先查 information_schema 再动 ⇒ 新库（schema.sql 已是新形状）零操作、
+//
+//	旧库首跑补齐、二跑零操作 —— 与 CREATE TABLE 路径同一套幂等判据。
+//
+// ★ 旧预报行、已到货车次、检测链一律不删（D1.2 迁移红线）。
+func migrateRecvBatchShape(ctx context.Context, tx *sql.Tx) error {
+	exists, err := tableExists(ctx, tx, "b_arrival_notice")
+	if err != nil || !exists {
+		return err // 表不存在 ⇒ 新库路径，CREATE 语句会带出新形状
+	}
+	hasCol := func(table, col string) (bool, error) {
+		var n int
+		err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM information_schema.columns
+			  WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+			table, col).Scan(&n)
+		return n > 0, err
+	}
+	hasIdx := func(table, idx string) (bool, error) {
+		var n int
+		err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM information_schema.statistics
+			  WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
+			table, idx).Scan(&n)
+		return n > 0, err
+	}
+	run := func(ddl string) error {
+		if _, err := tx.ExecContext(ctx, ddl); err != nil {
+			return fmt.Errorf("N-023 结构演进失败（%s）: %w", trim(ddl, 80), err)
+		}
+		return nil
+	}
+
+	if ok, err := hasCol("b_arrival_notice", "batch_id"); err != nil {
+		return err
+	} else if !ok {
+		if err := run(`ALTER TABLE b_arrival_notice
+  ADD COLUMN batch_id BIGINT UNSIGNED NULL COMMENT '所属来料批次（NULL = 旧版预报）' AFTER notice_no`); err != nil {
+			return err
+		}
+	}
+	for _, col := range []string{"eta", "est_bag_count"} {
+		if ok, err := hasCol("b_arrival_notice", col); err != nil {
+			return err
+		} else if ok {
+			if err := run("ALTER TABLE b_arrival_notice DROP COLUMN `" + col + "`"); err != nil {
+				return err
+			}
+		}
+	}
+	if ok, err := hasIdx("b_arrival_notice", "idx_notice_seq"); err != nil {
+		return err
+	} else if ok {
+		if err := run(`ALTER TABLE b_arrival_notice DROP INDEX idx_notice_seq`); err != nil {
+			return err
+		}
+	}
+	if ok, err := hasIdx("b_arrival_notice", "idx_batch_seq"); err != nil {
+		return err
+	} else if !ok {
+		if err := run(`ALTER TABLE b_arrival_notice ADD INDEX idx_batch_seq (batch_id, seq_no)`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // splitSQL 去掉 `--` 整行注释后按 `;` 切分语句。

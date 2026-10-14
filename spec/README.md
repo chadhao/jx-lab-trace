@@ -7,27 +7,34 @@
 
 | 文件 | 内容 | 自校验 |
 |---|---|---|
-| `code-rules.json` | 追踪码规则：段定义 · 对象类型与层级 · 序号空间 · 校验算法参数 · 生成时机 · 解析步骤 · **5 条示例向量（含核算过的校验位）** · 人读行分组宽度 | `verify_code_rules.py` |
+| `code-rules.json` | 追踪码规则：段定义 · 对象类型与层级（**N-023 增 F=来料批次**）· 序号空间 · 校验算法参数 · 生成时机 · 解析步骤 · **6 条示例向量（含核算过的校验位）** · 人读行分组宽度 | `verify_code_rules.py` |
 | `verify_code_rules.py` | 校验：段宽之和 · 校验位复算 · `full == payload+check` · 人读行同构 · **「三段序 = 三层嵌套」不变量** · 相邻换位可检出性 | — |
 | `permission-points.json` | 权限点字典（**51 项**）· 角色（6 个）· 初始授权种子 · 约束 | `verify_permission_points.py` |
 | `verify_permission_points.py` | 校验 8 组：code 唯一 · levels 合法 · seed 对齐 · **系统管理员无业务权限** · **无悬空点/无空闲角色** · **发起 ≠ 审批** · **防锁死** | — |
-| `schema.sql` | 建表 DDL（**38 张**，MySQL 8.0） | 已在 MySQL 实测建表通过 |
+| `schema.sql` | 建表 DDL（**39 张**，MySQL 8.0） | 已在 MySQL 实测建表通过 |
+| `enums.json` | 业务状态枚举（N-023 起：批次状态 回货中/已关闭 等） | `check_spec.py`（判据双引擎 Py 侧） |
+| `checks.json` | N-023 判据清单（三元组唯一/关闭后不可预报/L1L2L3 口径/旧版排除/链根写入防回归…） | `check_spec.py` + `internal/specload`（Go 侧） |
+| `forms/` | 收货模块表单规格（批次预报表单 · 车次预报表单） | `check_spec.py` |
 
 ## 怎么跑
 
 ```bash
 python spec/verify_code_rules.py            # 退出码 0 = 通过
 python spec/verify_permission_points.py     # 退出码 0 = 通过
+python scripts/check_spec.py                # 退出码 0 = 通过（判据双引擎 Py 侧）
+go test ./internal/specload/                # 判据双引擎 Go 侧 + 跨引擎逐条对账
 ```
 
 ★ **必须以退出码表达失败**（`sys.exit`），否则脚本会在管道里被静默吃掉。
-★ 两个脚本均纳入 `scripts/check_all.sh` 的**必绿基线**。
+★ 均纳入 `scripts/check_all.sh` 的**必绿基线**（双引擎 Py 侧并入 spec 自校验项，Go 侧随 `go test`）。
 
 ## 新增规格的门槛
 
 1. 必须是**机读**的（JSON/SQL/Python，不是散文）；
 2. 必须配**自校验**（至少覆盖：结构自洽 + 已核算的示例向量）；
 3. 必须被 `check_all.sh` 消费（**写了没人跑的规格 = 假配置**）。
+4. **判据类新增 kind 必须双引擎同批落地**（`checks.json#kinds` 声明 + `check_spec.py` 与
+   `internal/specload` 各自实现；单侧实现 ⇒ 另一侧「未知 kind」判红 —— 这正是要的牙齿）。
 
 ## 与代码的关系
 

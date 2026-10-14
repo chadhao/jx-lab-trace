@@ -1,0 +1,32 @@
+{
+  "spec": "jx-lab-trace.enums",
+  "spec_version": 1,
+  "created_at": "2026-10-14",
+  "note": "业务状态枚举机读规格（N-023 起建）。供 internal/specload（Go 引擎）与 scripts/check_spec.py（Python 引擎）共同消费 —— 双引擎对同一文件独立求值，任一不过即门禁红。",
+  "enums": {
+    "incoming_batch_status": {
+      "table": "m_incoming_batch",
+      "column": "status",
+      "values": ["回货中", "已关闭"],
+      "note": "来料批次状态：预填即「回货中」；「回完货」= 手工关闭（幂等），关闭后不能再预报新车次。"
+    },
+    "arrival_notice_status": {
+      "table": "b_arrival_notice",
+      "column": "status",
+      "values": ["预报", "已到货", "已取消", "空号"],
+      "note": "车次预报状态（N-023 沿用旧值域）。"
+    },
+    "truck_lot_status": {
+      "table": "b_truck_lot",
+      "column": "status",
+      "values": ["待检", "合格", "不合格", "让步接收", "已退货", "已作废"],
+      "note": "车次状态（质检处置驱动）。"
+    },
+    "bag_status": {
+      "table": "b_bag",
+      "column": "status",
+      "values": ["在库", "已投料", "已退回", "留样中", "作废"],
+      "note": "吨袋状态；L1 投料进度以 status='已投料' 按 truck_lot 聚合（作废袋不入分母）。"
+    }
+  }
+}

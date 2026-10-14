@@ -1,0 +1,16 @@
+{
+  "form": "recv_batch_prefill",
+  "title": "批次预报表单",
+  "module": "收货",
+  "note": "N-023 新表单：客户下单后预填来料批次（同客户同产品多车）。",
+  "submit": "POST /api/recv/batches",
+  "fields": [
+    { "key": "customer_id", "label": "客户", "type": "ref", "ref": "m_customer", "required": true },
+    { "key": "material_id", "label": "产品", "type": "ref", "ref": "m_material", "required": true },
+    { "key": "customer_batch_no", "label": "客户批次号", "type": "text", "required": true, "max": 64 }
+  ],
+  "response_extra": ["our_batch_no"],
+  "error_cases": [
+    { "when": "(customer_id, material_id, customer_batch_no) 三元组重复", "code": 400, "body_hint": "error + existing[]（已有批次的 our_batch_no/customer_batch_no 供跳转）" }
+  ]
+}

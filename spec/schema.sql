@@ -1,7 +1,9 @@
 -- ============================================================================
 --  jx-lab-trace · 建表 DDL（MySQL 8.0）
 --  设计依据：docs/01-设计定案.md（v0.6 起）· docs/02-追踪码规则.md（v1 冻结）
---  共 38 张表。字符集 utf8mb4，引擎 InnoDB。
+--  共 39 张表。字符集 utf8mb4，引擎 InnoDB。
+--  ★ N-023（2026-10-14）：新增 m_incoming_batch（来料批次）；b_arrival_notice 加 batch_id、
+--    删 eta/est_bag_count（系统无预估）、seq 索引改按批次。
 --
 --  ★ 贯穿性原则（见设计定案 §2）：
 --    P1 数据不可变 —— 业务事实字段【只写不改】；修正走「作废 + 新增 + supersedes 链」。
@@ -21,7 +23,7 @@ SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
 -- ============================================================================
--- 一、主数据（8 张）
+-- 一、主数据（9 张）
 -- ============================================================================
 
 CREATE TABLE m_customer (
@@ -192,30 +194,49 @@ CREATE TABLE m_user (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户（飞书 open_id 为身份主键；不适用版本链）';
 
 -- ============================================================================
--- 二、收货与打码（5 张）
+-- 二、收货与打码（6 张）
 -- ============================================================================
+
+-- ★ N-023 来料批次：客户下单后预填；一个批次 = 同客户同产品的多台车。
+--   我方批次号 = 27 位追踪码新码类 F（含时间戳，天然唯一）；
+--   唯一三元组 = (customer_id, material_id, customer_batch_no) ⇒ 重复预填报错并列出已有批次。
+CREATE TABLE m_incoming_batch (
+  id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  our_batch_no       CHAR(27)     NOT NULL COMMENT '我方批次号（追踪码新码类 F，含时间戳）',
+  customer_batch_no  VARCHAR(64)  NOT NULL COMMENT '客户提供的批次号',
+  customer_id        BIGINT UNSIGNED NOT NULL,
+  material_id        BIGINT UNSIGNED NOT NULL,
+  status             VARCHAR(16)  NOT NULL DEFAULT '回货中' COMMENT '回货中 / 已关闭',
+  closed_at          DATETIME(3)  NULL,
+  closed_by          VARCHAR(64)  NULL,
+  created_at         DATETIME(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  created_by         VARCHAR(64)  NOT NULL DEFAULT '',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_our_batch_no (our_batch_no),
+  UNIQUE KEY uk_batch_triple (customer_id, material_id, customer_batch_no),
+  KEY idx_batch_status (status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='来料批次（客户下单预填；一批次同产品多车）';
 
 CREATE TABLE b_arrival_notice (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   notice_no     VARCHAR(32)     NOT NULL COMMENT '预报单号',
+  batch_id      BIGINT UNSIGNED NULL COMMENT '所属来料批次（NULL = 旧版预报，N-023 前的存量行）',
   customer_id   BIGINT UNSIGNED NOT NULL,
   material_id   BIGINT UNSIGNED NOT NULL,
   vehicle_id    BIGINT UNSIGNED NULL,
   plate_no      VARCHAR(32)     NULL,
   driver        VARCHAR(64)     NULL,
   phone         VARCHAR(32)     NULL,
-  eta           DATETIME(3)     NULL COMMENT '预计到货时间',
-  est_bag_count INT             NULL COMMENT '预计袋数（仅预报用，不据此打码）',
   biz_type      CHAR(2)         NOT NULL DEFAULT 'CG' COMMENT 'CG 客供 / ZG 自购',
-  seq_no        SMALLINT UNSIGNED NULL COMMENT '预分配的车序（空号跳号不回收）',
-  arrive_date   DATE            NULL COMMENT '链根日期：到货日',
+  seq_no        SMALLINT UNSIGNED NULL COMMENT '预分配车序（批次内递增；空号跳号不回收；旧行为存量语义）',
+  arrive_date   DATE            NULL COMMENT '链根日期：到货确认时刻写入（表单不再输入）',
   status        VARCHAR(16)     NOT NULL DEFAULT '预报' COMMENT '预报 / 已到货 / 已取消 / 空号',
   created_at    DATETIME(3)     NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   created_by    VARCHAR(64)     NOT NULL DEFAULT '',
   PRIMARY KEY (id),
   UNIQUE KEY uk_notice_no (notice_no),
-  KEY idx_notice_seq (customer_id, material_id, arrive_date, seq_no)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='预报单（客户提前告知的车辆信息）';
+  KEY idx_batch_seq (batch_id, seq_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='预报单（N-023 起只选批次 + 车辆信息；旧行 batch_id 为 NULL）';
 
 CREATE TABLE b_truck_lot (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -706,9 +727,10 @@ CREATE TABLE s_session (
 SET FOREIGN_KEY_CHECKS = 1;
 
 -- ============================================================================
---  校验视图（可选）：一段式自检 —— 表数应为 38
+--  校验视图（可选）：一段式自检 —— 表数应为 39
 --  ★ 2026-10-09 更正（COLLAB N-002）：原写 37，与文件内实际 CREATE TABLE 数（38）不符 ——
 --    根因是后来新增 `m_test_item_limit` 后漏改注释。★ 教训：**能由文件自身数出来的数字，就别手写在注释里**。
+--  ★ 2026-10-14 N-023：新增 `m_incoming_batch` ⇒ 38 → 39。
 -- ============================================================================
 -- SELECT COUNT(*) AS table_count FROM information_schema.tables
 --  WHERE table_schema = DATABASE();
