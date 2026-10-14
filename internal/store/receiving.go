@@ -738,6 +738,14 @@ func scanTruck(sc interface{ Scan(...interface{}) error }) (TruckLot, error) {
 //
 //	**到货确认时刻写入** notice.arrive_date（已有的旧版预报保留原值不覆盖），
 //	车码 DATE 段与 b_truck_lot.arrive_date 均取该链根日期 —— 机制一字不改，只是写入点从表单挪到确认。
+//
+// ★★ 码内 SEQ1（N-023 与批次内 seq_no 解耦）：车码 SEQ1 的空间按**码规则冻结定义**
+//
+//	= 客户 + 原料物料 + 到货日（code-rules#sequence_spaces.车序），确认时从 b_truck_lot
+//	已有码 MAX+1 分配（jxlab.codeseg.{cust}.{mat} 命名锁串行；锁顺序恒为
+//	批次锁 → 码锁 → 事务行锁，全路径一致 ⇒ 无死锁环）。
+//	预报行 seq_no 是**批次内流水**（D1.2，展示与跳号用），不再直接进码 ——
+//	否则同客户同产品同到货日**跨批次**的两个 01 号车必撞 uk_truck_code（服务器 TC 实测）。
 func (s *Store) ConfirmArrival(ctx context.Context, in ArriveInput, actor MDActor) (TruckLot, error) {
 	if in.NoticeID <= 0 && in.Inline == nil {
 		return TruckLot{}, fmt.Errorf("%w：需要 notice_id（已有预报）或 notice（无预报直接到货）", ErrRecvBadInput)
@@ -751,18 +759,42 @@ func (s *Store) ConfirmArrival(ctx context.Context, in ArriveInput, actor MDActo
 	}
 	defer conn.Close()
 
-	// 无预报直接到货 ⇒ 要取车序 ⇒ 同样要拿车序锁（N-023：按批次取号）
-	var lock string
+	// —— 锁名参数预读（快照读，仅用于取锁；行权威校验在 tx 内 FOR UPDATE 重读）——
+	var custID, matID int64
 	if in.Inline != nil {
 		if err := validateInlineNotice(in.Inline); err != nil {
 			return TruckLot{}, err
 		}
-		lock = seqLockNameBatch(in.Inline.BatchID)
-		if err := acquireSeqLock(ctx, conn, lock); err != nil {
+		if err := conn.QueryRowContext(ctx,
+			`SELECT customer_id, material_id FROM m_incoming_batch WHERE id = ?`,
+			in.Inline.BatchID).Scan(&custID, &matID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return TruckLot{}, fmt.Errorf("%w：来料批次 #%d", ErrRecvNotFound, in.Inline.BatchID)
+			}
+			return TruckLot{}, fmt.Errorf("读取批次失败: %w", err)
+		}
+		// 无预报直接到货 ⇒ 先拿批次车序锁（N-023：按批次取号）。
+		batchLock := seqLockNameBatch(in.Inline.BatchID)
+		if err := acquireSeqLock(ctx, conn, batchLock); err != nil {
 			return TruckLot{}, err
 		}
-		defer releaseSeqLock(conn, lock)
+		defer releaseSeqLock(conn, batchLock)
+	} else {
+		if err := conn.QueryRowContext(ctx,
+			`SELECT customer_id, material_id FROM b_arrival_notice WHERE id = ?`,
+			in.NoticeID).Scan(&custID, &matID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return TruckLot{}, fmt.Errorf("%w：预报单 #%d", ErrRecvNotFound, in.NoticeID)
+			}
+			return TruckLot{}, fmt.Errorf("读取预报单失败: %w", err)
+		}
 	}
+	// 码序锁：所有确认路径都拿（覆盖码 SEQ1 空间 = 客户+物料）。
+	codeLock := codeSeqLockName(custID, matID)
+	if err := acquireSeqLock(ctx, conn, codeLock); err != nil {
+		return TruckLot{}, err
+	}
+	defer releaseSeqLock(conn, codeLock)
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -839,14 +871,20 @@ VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		return TruckLot{}, err
 	}
 
-	// ★ 车码 A：DATE = 链根日期（到货日），SEQ1 = 车序，SEQ2/SEQ3 = 000
+	// ★ 码内 SEQ1：按码规则空间（客户+物料+到货日）从已有码 MAX+1 分配（码锁已持有）。
+	codeSeq, err := nextCodeSeq(ctx, tx, n.CustomerID, n.MaterialID, arriveDate)
+	if err != nil {
+		return TruckLot{}, err
+	}
+
+	// ★ 车码 A：DATE = 链根日期（到货日），SEQ1 = 码内车序，SEQ2/SEQ3 = 000
 	code, err := codec.Generate(codec.Segments{
 		T:        "A",
 		BT:       n.BizType,
 		Customer: custCode,
 		Material: matCode,
 		Date:     yymmdd(arriveDate),
-		SEQ1:     pad(n.SeqNo, 2),
+		SEQ1:     pad(codeSeq, 2),
 		SEQ2:     codec.Placeholder,
 		SEQ3:     codec.Placeholder,
 	})
@@ -1007,6 +1045,37 @@ ORDER BY seq_no DESC LIMIT 1 FOR UPDATE`,
 // seqLockNameBatch 生成批次车序空间对应的 MySQL 命名锁名（≤64 字符）。
 func seqLockNameBatch(batchID int64) string {
 	return fmt.Sprintf("jxlab.seq.batch.%d", batchID)
+}
+
+// codeSeqLockName 生成**码内 SEQ1 空间**（客户+物料，覆盖全部到货日）的命名锁名。
+// 比 (客户+物料+到货日) 粗一档：锁名不依赖 arriveDate（确认前可能为 NULL），
+// 到货确认低频，粗粒度换简单与安全。
+func codeSeqLockName(customerID, materialID int64) string {
+	return fmt.Sprintf("jxlab.codeseg.%d.%d", customerID, materialID)
+}
+
+// nextCodeSeq 取码内下一个 SEQ1（★ 必须在持有 codeSeqLockName 且处于事务内时调用）。
+//
+//	空间 = 客户 + 原料物料 + 到货日（spec#sequence_spaces.车序 的冻结定义）；
+//	直接从**已生成的车码**第 19-20 位取 MAX（旧行与新行同池 ⇒ 跨批次不重号）；
+//	超 99 明确报错，绝不自动进位。
+func nextCodeSeq(ctx context.Context, tx *sql.Tx, customerID, materialID int64, arriveDate string) (int, error) {
+	var max sql.NullInt64
+	err := tx.QueryRowContext(ctx, `
+SELECT MAX(CAST(SUBSTRING(code, 19, 2) AS UNSIGNED)) FROM b_truck_lot
+WHERE customer_id = ? AND material_id = ? AND arrive_date = ?`,
+		customerID, materialID, arriveDate).Scan(&max)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("读取码内车序失败: %w", err)
+	}
+	next := 1
+	if max.Valid {
+		next = int(max.Int64) + 1
+	}
+	if next > SeqMax {
+		return 0, ErrSeqOverflow
+	}
+	return next, nil
 }
 
 // acquireSeqLock 在**本会话**上取命名锁（超时 ⇒ 明确报错，不静默重试）。

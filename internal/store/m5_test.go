@@ -126,7 +126,8 @@ func m5STruckWithBags(t *testing.T, st *Store, custID, matID int64, bags int) (T
 	if err != nil {
 		t.Fatalf("登记预报失败: %v", err)
 	}
-	truck, err := st.ConfirmArrival(ctx, ArriveInput{NoticeID: n.ID}, m5SActor())
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.Local)
+	truck, err := st.ConfirmArrival(ctx, ArriveInput{NoticeID: n.ID, ArriveAt: &at}, m5SActor())
 	if err != nil {
 		t.Fatalf("到货确认失败: %v", err)
 	}

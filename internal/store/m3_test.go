@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -114,7 +115,9 @@ func m3Notice(t *testing.T, st *Store, batchID int64) ArrivalNotice {
 func m3Arrive(t *testing.T, st *Store, batchID int64) TruckLot {
 	t.Helper()
 	n := m3Notice(t, st, batchID)
-	truck, err := st.ConfirmArrival(context.Background(), ArriveInput{NoticeID: n.ID}, m3Actor())
+	// 链根日期钉为固定日（N-023：确认时写入 ⇒ 用 ArriveAt 显式钉住，保日期段断言可重复）
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.Local)
+	truck, err := st.ConfirmArrival(context.Background(), ArriveInput{NoticeID: n.ID, ArriveAt: &at}, m3Actor())
 	if err != nil {
 		t.Fatalf("到货确认失败: %v", err)
 	}

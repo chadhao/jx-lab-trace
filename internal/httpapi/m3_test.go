@@ -134,6 +134,17 @@ func (e *env) doRaw(method, path, cookie, body string) (*http.Response, string) 
 	return resp, string(raw)
 }
 
+// tzOffset 返回本机时区的 RFC3339 偏移（如 "+08:00"），供钉链根时刻的 JSON 时间串使用。
+func tzOffset() string {
+	_, off := time.Now().Zone()
+	s := "+"
+	if off < 0 {
+		s = "-"
+		off = -off
+	}
+	return fmt.Sprintf("%s%02d:%02d", s, off/3600, (off%3600)/60)
+}
+
 // m3CreateBatch 经接口预填一个来料批次，返回 batch_id。
 // customer_batch_no 用纳秒后缀 ⇒ 同客户同产品重复预填不撞三元组（可重复执行）。
 func m3CreateBatch(t *testing.T, e *env, ck string, custID, matID int64) int64 {
@@ -168,7 +179,8 @@ func m3ArriveViaHTTP(t *testing.T, e *env, ck string, custID, matID int64) map[s
 	}
 	notice, _ := body["row"].(map[string]interface{})
 	resp, body = e.do("POST", "/api/recv/arrivals", ck,
-		fmt.Sprintf(`{"notice_id": %v}`, int64(numOf(notice["id"]))))
+		fmt.Sprintf(`{"notice_id": %v, "arrive_at": "2026-10-09T12:00:00%s"}`,
+			int64(numOf(notice["id"])), tzOffset()))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("到货确认应 200，实际 %d body=%v", resp.StatusCode, body)
 	}
@@ -207,8 +219,8 @@ func TestTC_M3_07_DirectArrivalWithoutNotice(t *testing.T) {
 	cust, mat := m3MasterIDs(t, e.st)
 	batchID := m3CreateBatch(t, e, ck, cust, mat)
 
-	body := fmt.Sprintf(`{"notice": %s, "remark": "现场临时派车"}`,
-		m3NoticeBody(batchID))
+	body := fmt.Sprintf(`{"notice": %s, "remark": "现场临时派车", "arrive_at": "2026-10-09T12:00:00%s"}`,
+		m3NoticeBody(batchID), tzOffset())
 	resp, out := e.do("POST", "/api/recv/arrivals", ck, body)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("无预报直接到货应 200，实际 %d body=%v", resp.StatusCode, out)
@@ -227,9 +239,9 @@ func TestTC_M3_07_DirectArrivalWithoutNotice(t *testing.T) {
 	if truck["status"] != "待检" {
 		t.Fatalf("车次状态应「待检」，实际 %v", truck["status"])
 	}
-	// ★ N-023：链根日期由到货确认写入 ⇒ 值为确认日（今天）
-	if truck["arrive_date"] != time.Now().Format("2006-01-02") {
-		t.Fatalf("链根日期应为确认日 %s，实际 %v", time.Now().Format("2006-01-02"), truck["arrive_date"])
+	// ★ N-023：链根日期由到货确认写入（arrive_at 钉住 2026-10-09 ⇒ 写入值 = 该日）
+	if truck["arrive_date"] != m3HTTPDate {
+		t.Fatalf("链根日期应由到货确认写入为 %s，实际 %v", m3HTTPDate, truck["arrive_date"])
 	}
 	if truck["human"] == "" || !strings.Contains(fmt.Sprint(truck["human"]), "-") {
 		t.Fatalf("应返回人读行 human，实际 %v", truck["human"])

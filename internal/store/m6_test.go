@@ -146,7 +146,8 @@ func m6TruckWithBags(t *testing.T, st *Store, custID, inMatID int64, bags int) (
 	if err != nil {
 		t.Fatalf("登记预报失败: %v", err)
 	}
-	truck, err := st.ConfirmArrival(ctx, ArriveInput{NoticeID: n.ID}, m6Actor())
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.Local)
+	truck, err := st.ConfirmArrival(ctx, ArriveInput{NoticeID: n.ID, ArriveAt: &at}, m6Actor())
 	if err != nil {
 		t.Fatalf("到货确认失败: %v", err)
 	}
