@@ -1899,8 +1899,65 @@
 - **我方立场**：**绑定动作移入表格行**：移除「绑定角色」表单面板；每行加「＋绑定角色」⇒ 行内角色下拉（仅列未绑角色）⇒ 确认（复用现有 bind API）⇒ 原位刷新；表格上方保留姓名/open_id 过滤；open_id 行内显示短格式；手填兜底可移除（users 端点覆盖完整）。★ 纯前端改造。
 - **建议方案**：任务包 **`MIMO-NEXT-FIX-08.md`**（D1 表内绑定 ＋ D2 兜底 ＋ D3 三态核对与交付）。
 - **制度影响面**：零——仅前端组件；不改 `spec/`、不改后端。
-- **状态**：OPEN
-- **最后更新**：2026-10-18 14:30
+
+**★★ mimo 回执 · 2026-10-18 15:15 · `MIMO-NEXT-FIX-08` 交付完毕（D1 行内绑定 · D2 兜底移除 · D3 三态核对/门禁/部署/curl 往返）；状态改 `MIMO-DONE`**
+
+★ 本段为 `N-024` 段内**局部追加**，未整体重写 `COLLAB.md`（`check_collab.py` / `check_collab_anchors.py` / `check_md_tables.py` 均绿）。
+
+**1. D1 表格行内绑定（`web/src/components/PermissionAdmin.vue`，纯前端）**
+
+- ★ **移除「绑定角色」表单面板**（账号\* 下拉整个去掉）；**表格（`GET /api/admin/users` 全量账号）成为唯一绑定入口**——绑定/解绑/同步全在表内完成，无表单区。
+- ★ 每行「操作」列 **「＋绑定角色」** ⇒ **行内展开**（`.bind-row`）：角色下拉 **仅列该账号尚未绑定的角色**（`availRolesOf = 启用角色 − a.roles`）＋「确认绑定」⇒ 调现有 `POST /api/admin/user-roles`（reason=「后台绑定角色」）⇒ 成功后 `Promise.all([loadUsers, loadRoles])` **原位刷新**（不整页刷新）。
+- ★ 表格上方**过滤输入框**（姓名/open_id 小写模糊、实时过滤、**保持服务端顺序不重排**——承接原下拉过滤能力）。
+- ★ 已绑角色标签（×解绑）交互**不变**；解绑后 `loadUsers` 刷新 ⇒ 该角色回到行内下拉可选列表。
+- ★ open_id 显示**短格式**（前 10 位…）；点击展开全量并复制（`navigator.clipboard`，剪贴板不可用仅展开不打断）；`title` 悬停亦给全量。
+- ★ 样式：`web/src/style.css` 仅 `.bind-row` 一段（注明 N-024）；`acct-list`/`.combo` 随手填表单一并移除。
+
+**2. D2 手填兜底移除**
+
+- ★ 手填 open_id 输入框**随表单面板移除**——`/api/admin/users` 覆盖全部 `m_user`（含无角色账号），无「列表外账号」场景（任务包 D2 原文授权）。
+
+**3. D3 三态与构建**
+
+- ★ 三态（服务器实测数据核对）：
+  | 态 | 证据 |
+  | --- | --- |
+  | 无角色账号（行内可选全角色） | 6 行 `roles=[]`（胡锦/刘纯/高帅/回调测试/刘川/ou_dj_01）；curl 往返实测对其一绑定 `receiver` ⇒ `avail` 曾为全部 6 个启用角色 |
+  | 已绑部分角色（下拉只列未绑） | 郝端 `['management','sysadmin']`；前端 `availRolesOf` 过滤逻辑 + curl 往返中绑后角色集含 `receiver` |
+  | 全角色已绑（按钮置灰＋提示） | `ou_dj_e2e` **6/6 全绑**；前端 `:disabled="!availRolesOf(a).length"` ＋ title「该账号已绑定全部角色」 |
+- ★ `bash -lc "cd web && npm run build"` 成功；`scripts/build.sh` 全量重建，dist 重嵌入库（`index-i8L8cvP6.js` / `index-9AsatS9m.css`）。
+- ★ 构建产物标记核对（本地 dist）：`＋绑定角色` / `按姓名 / open_id 过滤` / `该账号已绑定全部角色` / `行内选择角色并绑定` / `open_id 已复制` / `bind-row` 各 ≥1；旧表单残留 `账号*` / `手填 open_id` / `acct-list` = **0**。
+
+**4. 门禁与测试**
+
+- 既有测试全绿：`bash scripts/check_all.sh` ⇒ **必绿 11/11**（含 `go test ./...`）；会报 2 项无命中；exit 0。★ 纯前端改造**无新增后端 TC**（任务包 §6-1：不改后端 API）。
+
+**5. D5 部署与 curl 实测**
+
+- 部署 `bash scripts/deploy-test-server.sh --restart --smoke` ⇒ 新 PID **507396**；`/healthz` 200 且 **`version=648c82f` == HEAD、非 -dirty**；`dev=true`；主服务与 reportd 均只绑回环。
+- ★★ **`.env` 守护（N-020 红线）**：部署前服务器 `.env` 与本地 `.env.deploy` **md5 一致**（`22c81fb88b2776d36a309caaa3991567`，31 行）；部署后复核 **md5 不变、31 行**。
+- ★ curl 实测（测试服务器 `127.0.0.1:18080`，脚本断言式，**6/6 全过**）：
+
+| 用例 | 结果 |
+| --- | --- |
+| 未登录 `GET /api/admin/users` | **401** `{"error":"未登录或会话已失效"}` |
+| `POST bind receiver → 胡锦`（未绑账号，行内全角色场景） | **200** `{"bound":true,...,"roles":["receiver"]}` |
+| 绑后 `GET users` | roles 含 `receiver` |
+| 重复 bind 同角色 | **409**「该绑定已被占用」 |
+| `DELETE unbind` | **200** `{"unbound":true,"roles":[]}` |
+| 解绑后 `GET users` | roles 不再含 `receiver`（回到行内可选） |
+| 审计抽查 | `s_user_role` bind/unbind 各 1 条，actor=`ou_dev_admin`（sysadmin），时间戳 2026-10-18T15:10:52 |
+
+- 提交：**显式路径、只本地提交**（`648c82f` D1 前端＋dist · 本回执另行一提），**不 push**。
+
+★ **如实声明的未做项 / 需用户知悉**
+
+1. ★ **真浏览器逐帧点验未做**（`docs/05` 本机不跑服务）：D1 交互以「构建产物含标记 ＋ curl 绑定-解绑往返 6/6 ＋ 三态数据核对」承担；如需像素级确认，可在测试服 `dev=true` 下用浏览器走 过滤 → 行内绑定 → 解绑 → 全绑置灰。
+2. **`deploy-test-server.sh` 仍会用本地 `.env.deploy` 覆盖服务器 `.env`** —— N-020 根因路径未除（N-020 单独立案）；本单沿用 N-021/N-022/N-023 做法：部署前 md5 对齐、部署后 md5 复核（本单一致）。
+3. **`MIMO-NEXT-FIX-09.md`（N-025 任务包）随工作区出现但未执行**——非本单范围，未入库，留待下一轮派工。
+
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-18 15:15
 
 ## 5. 已决议
 
