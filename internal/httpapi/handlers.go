@@ -287,6 +287,24 @@ func (s *Server) openSession(c echo.Context, openID, name, how string) (time.Tim
 	} else if st == "停用" {
 		return zero, ErrLoginDenied
 	}
+
+	// ★ N-025 D1 首个飞书登录自动 sysadmin（bootstrap-on-first-login）。
+	//   条件① how=feishu_login —— dev 桩不进此分支（防 ou_dev_admin 抢占）；
+	//   条件③ JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID 未配置 —— 与启动引导互斥；
+	//   条件②（s_user_role 中不存在 sysadmin 绑定）在 Store 事务内二次确认（幂等）。
+	//   ★ 必须在下面的「无角色即拒绝」之前：清库后首个飞书用户正是靠这一步拿到角色。
+	//   ★ Store 内部先 EnsureUser 落账号行、再绑角色（D1 口径「EnsureUser 之后」），
+	//     故 m_user 空表时本人账号由本路径一并重建（N-025 D3）。
+	bootstrapped := false
+	if how == "feishu_login" && s.Cfg.BootstrapSysAdminOpenID == "" {
+		bound, err := s.Store.BootstrapFirstSysAdmin(ctx, openID, name,
+			store.MDActor{OpenID: openID, Name: name, IP: c.RealIP()})
+		if err != nil {
+			return zero, echo.NewHTTPError(http.StatusInternalServerError, "引导系统管理员失败")
+		}
+		bootstrapped = bound
+	}
+
 	roles, err := s.Store.RolesOf(ctx, openID)
 	if err != nil {
 		return zero, echo.NewHTTPError(http.StatusInternalServerError, "查询角色失败")
@@ -322,6 +340,13 @@ func (s *Server) openSession(c echo.Context, openID, name, how string) (time.Tim
 		}
 	}
 	access.SetPrincipal(c, p)
+
+	// ★ 引导明示（D1）：登录响应带机器可读标记 ＋ 服务端日志点名「已引导为系统管理员」。
+	//   飞书回调随后 302 回首页 ⇒ 头在重定向响应上（curl -i / 测试可断言）。
+	if bootstrapped {
+		c.Response().Header().Set("X-JX-Bootstrap-Sysadmin", "1")
+		c.Logger().Infof("登录引导：%s（%s）已引导为系统管理员（action=bootstrap_sysadmin）", openID, name)
+	}
 
 	if err := s.appendAudit(c, p, audit.Entry{
 		Entity: "s_session", Action: how, Field: "session_id", NewValue: "created",

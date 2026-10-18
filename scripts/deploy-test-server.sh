@@ -23,8 +23,10 @@ HOST="${JX_DEPLOY_HOST:-chadhao@192.168.10.50}"
 REMOTE_DIR="${JX_DEPLOY_DIR:-jx-lab-trace}"          # 相对家目录，免 sudo
 BIN_NAME="jxlabtrace"
 REPORTD_NAME="reportd"                                # 批 8 · M9 公网侧静态服务（零 DB）
+DBTOOL_NAME="jxdbtool"                                # N-025 D2 · reset_db.sh 的 SQL 后端（无 mysql 客户端环境的兜底）
 LOCAL_BIN="bin/${BIN_NAME}-linux-amd64"
 LOCAL_REPORTD="bin/${REPORTD_NAME}-linux-amd64"
+LOCAL_DBTOOL="bin/${DBTOOL_NAME}-linux-amd64"
 ENV_FILE=".env.deploy"
 PORT="${JX_DEPLOY_PORT:-18080}"
 REPORTD_PORT="${JX_REPORTD_PORT:-18090}"
@@ -55,6 +57,11 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "$GO" build -trimpath \
   -ldflags "-s -w" \
   -o "$LOCAL_REPORTD" ./cmd/reportd
 ls -l "$LOCAL_REPORTD" | awk '{print "      "$5" bytes  "$9}'
+# N-025 D2 · jxdbtool（scripts/reset_db.sh 的 SQL 通道；非守护进程，只上传不驻留）
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 "$GO" build -trimpath \
+  -ldflags "-s -w" \
+  -o "$LOCAL_DBTOOL" ./cmd/jxdbtool
+ls -l "$LOCAL_DBTOOL" | awk '{print "      "$5" bytes  "$9}'
 
 echo "[2/4] 确保服务器目录存在（家目录下，免 sudo）"
 ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p ~/$REMOTE_DIR/{bin,logs,attachments,reports/served,reports/_inactive} && echo ok"
@@ -137,8 +144,9 @@ fi
 echo "[3/4] 上传二进制与运行配置"
 scp "${SSH_OPTS[@]}" "$LOCAL_BIN" "$HOST:~/$REMOTE_DIR/bin/$BIN_NAME" >/dev/null
 scp "${SSH_OPTS[@]}" "$LOCAL_REPORTD" "$HOST:~/$REMOTE_DIR/bin/$REPORTD_NAME" >/dev/null
+scp "${SSH_OPTS[@]}" "$LOCAL_DBTOOL" "$HOST:~/$REMOTE_DIR/bin/$DBTOOL_NAME" >/dev/null
 scp "${SSH_OPTS[@]}" "$ENV_FILE"  "$HOST:~/$REMOTE_DIR/.env" >/dev/null
-ssh "${SSH_OPTS[@]}" "$HOST" "chmod 700 ~/$REMOTE_DIR/bin/$BIN_NAME ~/$REMOTE_DIR/bin/$REPORTD_NAME && chmod 600 ~/$REMOTE_DIR/.env && echo '权限已收紧（二进制 700 / 配置 600）'"
+ssh "${SSH_OPTS[@]}" "$HOST" "chmod 700 ~/$REMOTE_DIR/bin/$BIN_NAME ~/$REMOTE_DIR/bin/$REPORTD_NAME ~/$REMOTE_DIR/bin/$DBTOOL_NAME && chmod 600 ~/$REMOTE_DIR/.env && echo '权限已收紧（二进制 700 / 配置 600）'"
 
 if [ "$DO_RESTART" = 1 ]; then
   echo "[4/4] 重启服务（在服务器上）"
