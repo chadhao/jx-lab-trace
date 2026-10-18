@@ -14,7 +14,6 @@ const msg = ref('')
 const err = ref('')
 const collapsed = ref({})
 const roles = ref([])
-const bindings = ref([])
 const auditRows = ref([])
 
 const LEVELS = ['ALL', 'READ', 'INIT', 'APPROVE', 'NONE']
@@ -119,14 +118,7 @@ async function loadRoles() {
     err.value = e.message
   }
 }
-async function loadBindings() {
-  try {
-    bindings.value = (await api.get('/api/admin/user-roles')).bindings || []
-  } catch (e) {
-    err.value = e.message
-  }
-}
-// ★ N-022 D2：账号选择器数据源 —— 全量账号（含无角色账号，未绑的服务端已排前）。
+// ★ N-024：表格数据源 —— 全量账号（含无角色账号，未绑的服务端已排前）；表格即唯一绑定入口。
 const accounts = ref([])
 async function loadUsers() {
   try {
@@ -156,7 +148,7 @@ async function createRole() {
     })
     msg.value = '角色已创建' + (newRole.value.copy_from ? `（已从 ${newRole.value.copy_from} 复制权限）` : '')
     newRole.value = { code: '', name: '', copy_from: '' }
-    await Promise.all([loadRoles(), loadMatrix(), loadBindings()])
+    await Promise.all([loadRoles(), loadMatrix(), loadUsers()])
   } catch (e) {
     err.value = e.message
   }
@@ -176,7 +168,7 @@ async function toggleRole(r) {
   if (!window.confirm(`确定 ${next} 角色「${r.name}」吗？`)) return
   try {
     await api.patch(`/api/admin/roles/${r.code}`, { status: next, reason: `${next}角色` })
-    await Promise.all([loadRoles(), loadBindings()])
+    await Promise.all([loadRoles(), loadUsers()])
   } catch (e) {
     err.value = e.message
   }
@@ -192,8 +184,62 @@ async function deleteRole(r) {
   }
 }
 
-// ---- 用户绑定 ----
-const bindForm = ref({ open_id: '', role_code: '' })
+// ---- 用户绑定（N-024：表格行内操作，唯一绑定入口）----
+const userFilter = ref('')       // 表格上方姓名/open_id 模糊过滤
+const bindRowOpen = ref('')      // 当前行内展开绑定的账号 open_id
+const bindRolePick = ref('')     // 行内已选角色 code
+const oidExpanded = ref({})      // open_id 全量展开状态（短格式默认，点开显示全量）
+
+// ★ 实时过滤：承接原下拉的过滤能力；保持服务端顺序（未绑在前）不重排。
+const filteredAccounts = computed(() => {
+  const q = (userFilter.value || '').trim().toLowerCase()
+  if (!q) return accounts.value
+  return accounts.value.filter(
+    (a) => (a.name || '').toLowerCase().includes(q) || (a.open_id || '').toLowerCase().includes(q))
+})
+
+// 行内可选角色 = 全部角色 − 该账号已绑角色（解绑后回到可选列表）。
+const availRolesOf = (a) => {
+  const bound = new Set(a.roles || [])
+  return roles.value.filter((r) => !bound.has(r.code))
+}
+
+function startBind(a) {
+  bindRowOpen.value = a.open_id
+  bindRolePick.value = ''
+}
+function cancelBind() {
+  bindRowOpen.value = ''
+  bindRolePick.value = ''
+}
+
+async function confirmBind(a) {
+  if (!bindRolePick.value) return
+  try {
+    await api.post('/api/admin/user-roles', {
+      open_id: a.open_id,
+      role_code: bindRolePick.value,
+      reason: '后台绑定角色',
+    })
+    msg.value = '已绑定（一个账号可叠加多个角色）'
+    cancelBind()
+    await Promise.all([loadUsers(), loadRoles()])
+  } catch (e) {
+    err.value = e.message
+  }
+}
+
+// ★ open_id 短格式：前 10 位…；点击展开全量并复制（悬停 title 也给全量）。
+const shortOid = (id) => (id && id.length > 12 ? id.slice(0, 10) + '…' : id)
+async function copyOid(id) {
+  oidExpanded.value = { ...oidExpanded.value, [id]: !oidExpanded.value[id] }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(id)
+      msg.value = 'open_id 已复制：' + id
+    }
+  } catch (e) { /* 剪贴板不可用时仅展开，不报错打断 */ }
+}
 
 // ★ N-022 D1 · 同步飞书组织（放「用户绑定」顶部 —— 与绑动作同域）。
 const syncing = ref(false)
@@ -206,8 +252,8 @@ async function syncOrg() {
     const r = await api.post('/api/admin/org/sync')
     msg.value = `同步完成：${r.total_depts} 个部门 / ${r.total_users} 个用户，` +
       `新建 ${r.created}、更新 ${r.updated}、停用 ${r.deleted || 0}`
-    // ★ 角色下拉联动：同步完立即刷新账号列表，新账号马上可选。
-    await Promise.all([loadUsers(), loadBindings(), loadRoles()])
+    // ★ 表格联动：同步完立即刷新账号列表，新账号马上出现在表中。
+    await Promise.all([loadUsers(), loadRoles()])
   } catch (e) {
     if (e.status === 403) {
       err.value = '没有同步飞书组织的权限，请联系管理员'
@@ -219,37 +265,10 @@ async function syncOrg() {
   }
 }
 
-// ★ N-022 D2 · 从列表选人：输入框既是过滤器也是值（保留手填兜底 ——
-//	输入非列表值时允许，兼容事件同步晚于列表拉取的时序）。
-const acctOpen = ref(false)
-const filteredAccounts = computed(() => {
-  const q = (bindForm.value.open_id || '').trim().toLowerCase()
-  if (!q) return accounts.value
-  return accounts.value.filter(
-    (a) => (a.name || '').toLowerCase().includes(q) || (a.open_id || '').toLowerCase().includes(q))
-})
-function pickAccount(a) {
-  bindForm.value.open_id = a.open_id
-  acctOpen.value = false
-}
-
-async function bind() {
-  try {
-    await api.post('/api/admin/user-roles', {
-      open_id: bindForm.value.open_id,
-      role_code: bindForm.value.role_code,
-      reason: '后台绑定角色',
-    })
-    msg.value = '已绑定（一个账号可叠加多个角色）'
-    await Promise.all([loadBindings(), loadRoles(), loadUsers()])
-  } catch (e) {
-    err.value = e.message
-  }
-}
 async function unbind(openID, role) {
   try {
     await api.del(`/api/admin/user-roles/${encodeURIComponent(openID)}/${role}`)
-    await Promise.all([loadBindings(), loadRoles(), loadUsers()])
+    await Promise.all([loadUsers(), loadRoles()])
   } catch (e) {
     err.value = e.message
   }
@@ -257,7 +276,7 @@ async function unbind(openID, role) {
 
 onMounted(async () => {
   await loadMatrix()
-  await Promise.all([loadRoles(), loadBindings(), loadAudit(), loadUsers()])
+  await Promise.all([loadRoles(), loadAudit(), loadUsers()])
 })
 </script>
 
@@ -367,63 +386,65 @@ onMounted(async () => {
       </div>
     </template>
 
-    <!-- ===== 用户绑定 ===== -->
+    <!-- ===== 用户绑定（N-024：表格行内操作） ===== -->
     <template v-else-if="tab === 'users'">
       <!-- ★ N-022 D1 · 同步飞书组织：与绑角色动作同域；同步期禁用防重复点击 -->
       <div class="toolbar">
         <button :disabled="syncing" @click="syncOrg">
           {{ syncing ? '同步中…（约数秒，请勿重复点击）' : '同步飞书组织' }}
         </button>
-        <span class="hint">从飞书拉取部门与人员：只新建/更新账号，不自动绑角色；完成后下方选人列表立即刷新</span>
+        <span class="hint">从飞书拉取部门与人员：只新建/更新账号，不自动绑角色；完成后下方表格立即刷新</span>
       </div>
 
-      <div class="panel">
-        <div class="panel-head"><b>绑定角色</b></div>
-        <div class="form">
-          <label class="combo">
-            <span>账号*</span>
-            <input v-model.trim="bindForm.open_id" placeholder="输入姓名/open_id 过滤后点选；也可直接手填"
-                   autocomplete="off"
-                   @focus="acctOpen = true" @input="acctOpen = true" @blur="acctOpen = false" />
-            <ul v-if="acctOpen && filteredAccounts.length" class="acct-list">
-              <li v-for="a in filteredAccounts" :key="a.open_id" @mousedown.prevent="pickAccount(a)">
-                <b>{{ a.name }}</b>
-                <code>{{ a.open_id }}</code>
-                <span v-if="a.roles && a.roles.length" class="tag">{{ a.roles.join(' + ') }}</span>
-                <span v-else class="hint">未绑角色</span>
-              </li>
-            </ul>
-          </label>
-          <label>
-            <span>角色*</span>
-            <select v-model="bindForm.role_code">
-              <option value="" disabled>请选择</option>
-              <option v-for="r in roles" :key="r.code" :value="r.code">{{ r.name }}</option>
-            </select>
-          </label>
-          <div class="full">
-            <button :disabled="!bindForm.open_id || !bindForm.role_code" @click="bind">绑定</button>
-            <span class="hint">同一账号可叠加多个角色，权限取并集；列表外的手填值也允许（兜底）</span>
-          </div>
-        </div>
+      <!-- ★ N-024：过滤框承接原下拉的过滤能力；表格是唯一绑定入口 -->
+      <div class="toolbar">
+        <input v-model.trim="userFilter" placeholder="按姓名 / open_id 过滤" autocomplete="off" />
+        <span class="hint">同一账号可叠加多个角色，权限取并集；未绑角色的账号排前</span>
       </div>
 
       <table>
         <thead><tr><th>open_id</th><th>姓名</th><th>状态</th><th>角色</th><th>操作</th></tr></thead>
         <tbody>
-          <tr v-for="b in bindings" :key="b.open_id">
-            <td>{{ b.open_id }}</td>
-            <td>{{ b.name }}</td>
-            <td>{{ b.status }}</td>
-            <td>
-              <span v-for="r in b.roles" :key="r" class="tag">
-                {{ r }}
-                <a href="javascript:;" @click="unbind(b.open_id, r)">×</a>
-              </span>
-            </td>
-            <td></td>
+          <template v-for="a in filteredAccounts" :key="a.open_id">
+            <tr>
+              <!-- ★ open_id 短格式：前 10 位…；点开显示全量并复制（悬停 title 亦全量） -->
+              <td>
+                <code class="mono" :title="a.open_id" style="cursor:pointer"
+                      @click="copyOid(a.open_id)">
+                  {{ oidExpanded[a.open_id] ? a.open_id : shortOid(a.open_id) }}
+                </code>
+              </td>
+              <td>{{ a.name }}</td>
+              <td>{{ a.status }}</td>
+              <td>
+                <span v-for="r in a.roles" :key="r" class="tag">
+                  {{ r }}
+                  <a href="javascript:;" @click="unbind(a.open_id, r)">×</a>
+                </span>
+              </td>
+              <td class="ops">
+                <button v-if="bindRowOpen !== a.open_id"
+                        :disabled="!availRolesOf(a).length"
+                        :title="!availRolesOf(a).length ? '该账号已绑定全部角色' : '行内选择角色并绑定'"
+                        @click="startBind(a)">＋绑定角色</button>
+                <button v-else class="ghost" @click="cancelBind">收起</button>
+              </td>
+            </tr>
+            <!-- ★ 行内展开：一次点击进到选角色；确认后原位刷新（不整页刷新） -->
+            <tr v-if="bindRowOpen === a.open_id" class="bind-row">
+              <td colspan="5">
+                <span class="hint">为「{{ a.name }}」绑定角色（仅列尚未绑定的）：</span>
+                <select v-model="bindRolePick">
+                  <option value="" disabled>请选择</option>
+                  <option v-for="r in availRolesOf(a)" :key="r.code" :value="r.code">{{ r.name }}</option>
+                </select>
+                <button :disabled="!bindRolePick" @click="confirmBind(a)">确认绑定</button>
+              </td>
+            </tr>
+          </template>
+          <tr v-if="!filteredAccounts.length">
+            <td colspan="5" class="empty">（{{ accounts.length ? '无匹配账号' : '无账号' }}）</td>
           </tr>
-          <tr v-if="!bindings.length"><td colspan="5" class="empty">（无绑定）</td></tr>
         </tbody>
       </table>
     </template>

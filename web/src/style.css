@@ -250,40 +250,13 @@ td.grey {
   font-size: 0.85rem;
 }
 
-/* ★ N-022 · 绑定角色的账号选择器（PermissionAdmin「用户绑定」子页签）。 */
-.form label.combo {
-  position: relative;
+/* ★ N-024 · 用户绑定改表格行内操作：展开行浅底衬示（原 N-022 组合框 .combo/.acct-list 已随表单移除）。 */
+.bind-row td {
+  background: rgba(127, 127, 127, 0.08);
 }
 
-.acct-list {
-  position: absolute;
-  z-index: 20;
-  top: 100%;
-  left: 0;
-  right: 0;
-  margin: 2px 0 0;
-  padding: 0.25rem;
-  list-style: none;
-  max-height: 16rem;
-  overflow: auto;
-  background: #fff;
-  border: 1px solid rgba(127, 127, 127, 0.45);
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
-}
-
-.acct-list li {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.3rem 0.4rem;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.acct-list li:hover {
-  background: rgba(127, 127, 127, 0.15);
+.bind-row select {
+  margin: 0 0.5rem;
 }
 
 /* ★ 未登录引导卡（2026-10-10）：鉴权失败时只显示登录入口，不渲染业务页。 */
