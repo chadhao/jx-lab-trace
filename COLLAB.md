@@ -1956,8 +1956,34 @@
 2. **`deploy-test-server.sh` 仍会用本地 `.env.deploy` 覆盖服务器 `.env`** —— N-020 根因路径未除（N-020 单独立案）；本单沿用 N-021/N-022/N-023 做法：部署前 md5 对齐、部署后 md5 复核（本单一致）。
 3. **`MIMO-NEXT-FIX-09.md`（N-025 任务包）随工作区出现但未执行**——非本单范围，未入库，留待下一轮派工。
 
-- **状态**：MIMO-DONE
+- **状态**：AGREED
 - **最后更新**：2026-10-18 15:15
+
+**★★★ WorkBuddy 独立验收 · 2026-10-18 14:45 —— 通过，`N-024` → `AGREED`**
+
+★ 不采信自报：门禁复跑 ＋ 服务器实测。
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| **G1** 门禁必绿 | ✅ | 复跑 ⇒ 必绿 11/11 全绿 |
+| **G2** 部署版本 | ✅ | `healthz` ⇒ **`648c82f`**（无 dirty；`.env` md5 前后一致） |
+| **G3** 前端改造 | ✅ | 服务器新 JS `index-i8L8cvP6.js`；**旧下拉 acctOpen 残留=0**（表单面板已移除） |
+| **G4** ★ 绑定-解绑往返 | ✅ | 实测（无角色测试账号 ou_dj_01）：绑 receiver ⇒ **200**；解绑 ⇒ 200；**复核绑定数=0** |
+| **G5** ★ N-023 教训吸收 | ✅ | 段内状态行**唯一**（替换而非追加） |
+
+**结论：`N-024` 验收通过 → `AGREED`**。
+
+### N-025 · 清库重置脚本 ＋ 首个飞书登录自动 sysadmin
+
+- **提出方**：WorkBuddy（用户定案 2026-10-18：功能实验从干净库开始，账号表也清，用户重新同步并分配角色；保留角色定义与权限矩阵）
+- **类型**：技术方案
+- **责任域**：mimo
+- **背景**：主数据与业务数据均为试验/联调数据（实测：客户4/产品3/检测项2 全为测试数据，车辆班组为空）。用户定案清空范围：**清** 全部 b_* 业务表＋m_incoming_batch＋主数据（m_customer/composition/material_type/material/test_item/test_item_limit/vehicle/team）＋**m_user**＋s_user_role＋s_session＋s_audit_log；**留** s_permission_point/s_role/s_role_permission（sysadmin 28 条授权已配好）。★ 配套新机制：**首个飞书登录用户自动成为 sysadmin**（否则清库后无人有权限）。
+- **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-09.md`**：**D1** bootstrap-on-first-login（三条件：feishu_login 来源／s_user_role 无 sysadmin 绑定／JX_BOOTSTRAP_ADMIN 未配置；dev 登录不触发；审计 bootstrap_sysadmin）**D2** `scripts/reset_db.sh`（默认 dry-run、`--force` 才执行、**mysqldump 全库备份先行**、按清单 TRUNCATE、执行后校验三保留表行数不变）**D3** 夹具依赖排查。★ `s_role/s_role_permission/s_permission_point` 三表任何路径不得被清。
+- **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
+- **制度影响面**：新增启动/登录引导逻辑与运维脚本；不改 `spec/` 业务口径。
+- **状态**：OPEN
+- **最后更新**：2026-10-18 14:50
 
 ## 5. 已决议
 
