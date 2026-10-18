@@ -1982,8 +1982,48 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-09.md`**：**D1** bootstrap-on-first-login（三条件：feishu_login 来源／s_user_role 无 sysadmin 绑定／JX_BOOTSTRAP_ADMIN 未配置；dev 登录不触发；审计 bootstrap_sysadmin）**D2** `scripts/reset_db.sh`（默认 dry-run、`--force` 才执行、**mysqldump 全库备份先行**、按清单 TRUNCATE、执行后校验三保留表行数不变）**D3** 夹具依赖排查。★ `s_role/s_role_permission/s_permission_point` 三表任何路径不得被清。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：新增启动/登录引导逻辑与运维脚本；不改 `spec/` 业务口径。
-- **状态**：OPEN
-- **最后更新**：2026-10-18 14:50
+
+**mimo 交付回执 · 2026-10-18 16:05（`MIMO-NEXT-FIX-09`，提交 `bebaf17`）**
+
+**1. D1 首个飞书登录自动 sysadmin（`internal/store/bootstrap.go` ＋ `internal/httpapi/handlers.go` 的 `openSession`）**
+
+- 触发＝三条件合取：登录来源 `how==feishu_login`（dev 桩不进此分支，防 `ou_dev_admin` 抢占）＋ `cfg.BootstrapSysAdminOpenID==""`（条件③，与启动引导互斥）＋ `BootstrapFirstSysAdmin` **事务内二次确认** `s_user_role` 无任何 sysadmin 绑定（条件②）。成功路径＝`ensureUserTx` 落账号行 → 绑定（`granted_by='bootstrap_login'`）→ 同事务审计 `action=bootstrap_sysadmin`（actor＝该用户本人）→ 提交。幂等：已有绑定 / 撞 `UNIQUE(open_id,role_code)` ⇒ 返回未引导，重复登录不重复绑。
+- 明示：重定向响应头 `X-JX-Bootstrap-Sysadmin: 1` ＋ 服务端日志「已引导为系统管理员（action=bootstrap_sysadmin）」。
+- ★ 三表红线：引导路径只写 `s_user_role / m_user / s_audit_log`；`s_role / s_role_permission / s_permission_point` 未被任何新代码路径触碰（既有权限管理 API 除外）。
+- ★ **TC 4 条**（`internal/httpapi/n025_test.go`，测试服务器 `JX_TEST_DB=1` 实跑 **4/4 PASS**）：①无绑定＋未配置＋feishu_login ⇒ 302 回首页＋引导头＋绑定恰 1 条（`granted_by=bootstrap_login`）＋审计＋`/api/me` `sys_roles` 含 sysadmin；重复登录无头、不重复绑、不重复审计 ②dev_login ⇒ 403 未映射角色，零绑定零审计 ③已有 sysadmin 绑定 ⇒ 第二个飞书用户 403（友好 HTML），零绑定零审计、原绑定不动 ④`JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID` 已配置 ⇒ feishu_login 不触发（403 零绑定零审计），且 `Migrate` 启动引导照旧（`granted_by='bootstrap'` 一字未变）。TC① 顺带钉住 D3：删除本人 `m_user` 行后登录 ⇒ 账号行被重建（清库空表路径正常）。
+
+**2. D2 `scripts/reset_db.sh`**
+
+- 默认 **dry-run**（列 36 张将清空表与行数＋3 张保留表行数，零写入）；显式 `--force` 才执行。`--force` 流程＝第一步 `mysqldump --single-transaction` 全库备份到 `~/jx-lab-trace/backups/jx_lab_trace_<时间戳>.sql`（保留不删；备份失败/空文件 ⇒ **中止不落刀**）→ 记录保留表基线 → TRUNCATE 36 张 → 校验：清空表全 0、三保留表与执行前逐张一致（任一不符 exit 1 并提示用备份恢复）→ 输出重置报告（备份文件名＋各表行数）＋提醒「重置后如重启服务，须先确认 `.env` 中 `JX_BOOTSTRAP_ADMIN` 已移除，否则启动引导将抢占首个 sysadmin」（该提示行对应实际变量 `JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID`；运维动作由 WorkBuddy 执行）。
+- 清空/保留清单逐条按任务包列名；服务器 dry-run 实测保留表 `s_permission_point=51 / s_role=6 / s_role_permission=306` 与规格一致。
+- ★ **如实声明（SQL/备份通道）**：测试服务器与本机都**没有 mysql 客户端**（服务器账号亦无 docker 权限、无免密 sudo）⇒ 新增零新依赖 Go 后端 `cmd/jxdbtool`（复用既有 `go-sql-driver/mysql`）作为第 3 条 SQL 通道，已并入 `deploy-test-server.sh` 上传为 `bin/jxdbtool`；dry-run 用该通道在服务器实测通过。**备份通道仍需 `mysqldump`**：当前服务器缺 ⇒ `--force` 会被前置检查拒绝（先备份后清空的安全口径不破）；真实重置前 WorkBuddy 需装 mysql-client 或授予 docker exec（`JX_MYSQL_CONTAINER`，缺省 `jx-lab-trace-mysql`）。`docker` / `mysql客户端` 两条通道代码就位但**未实测**（本交付账号无权限/无客户端）。
+
+**3. D3 依赖排查**
+
+- 夹具：m3–m8、n021–n023 等全部 `bindRole` 自建绑定（grep 核对），**无 TC 依赖** `JX_BOOTSTRAP_ADMIN` 启动引导（全部 `Migrate` 调用传空 bootstrap；`main.go` 启动路径未改）⇒ 既有夹具零改动。
+- `openSession→EnsureUser`：`UserStatus` 无行时返回空串非错误、`EnsureUser` 为 `INSERT .. ON DUPLICATE KEY` 幂等 ⇒ `m_user` 空表时飞书登录自动重建本人账号，由 TC① 删行后登录重建钉住。
+
+**4. 门禁与部署**
+
+- `bash scripts/check_all.sh` ⇒ **必绿 11/11**（会报：md 结构无命中；本机残留提示为编译期 `bin/` 产物，已清理）。
+- 服务器全套 TC（`bash scripts/run_tc_server.sh`，8 包 `JX_TEST_DB=1`）：**247 PASS / 0 FAIL / 0 SKIP**（httpapi 118→122，＋n025 四条；其余包计数不变）。
+- 部署 `bash scripts/deploy-test-server.sh --restart --smoke`：新 PID **508452**（reportd 508463）；`/healthz` 200 且 **`version=bebaf17` == HEAD、非 dirty**；`dev=true`；两进程只绑回环；启动日志 `JX_BOOTSTRAP_ADMIN = ou_dev_admin` ＋「引导系统管理员 "ou_dev_admin"」——即 TC④ 前半「启动引导行为不变」的现网证据。
+- ★ **`.env` 守护（N-020 红线）**：部署前/后服务器 `.env` 与本地 `.env.deploy` md5 均为 `22c81fb88b2776d36a309caaa3991567`、31 行，未变。
+
+**5. 服务器 curl/库内实测（`_probe/n025_verify.sh`，12/12 过）**
+
+| 用例 | 结果 |
+| --- | --- |
+| `GET /healthz` | 200，`version=bebaf17` == HEAD |
+| 无角色 dev 登录 `ou_n025_curl_probe` | **403** 未映射任何角色；库内绑定 0、`bootstrap_sysadmin` 审计 0（`jxdbtool` 只读核对） |
+| `ou_dev_admin` dev 登录 | 200；`GET /api/admin/permission-points` 200（sysadmin 矩阵可用） |
+| 飞书回调无 code | **400** ＋ `Content-Type: text/html`（友好页回归不破） |
+| `bash scripts/reset_db.sh` dry-run | 退出 0；36 张表合计 21463 行＋保留表 51/6/306；前后 `s_audit_log` 行数未变（21193）＝零写入；含 `JX_BOOTSTRAP_ADMIN` 提醒 |
+
+- ★ **提交**：显式路径、**只本地提交**（`bebaf17` 代码 ＋ 本回执另行一提），**不 push**。
+- ★ **如实声明的未做项 / 需用户知悉**：① TC①③④ 的飞书路径在测试服务器以**进程内假飞书端点**执行（真实 code 无法 curl 模拟）——清库后现网首登生效，需 WorkBuddy 移除 `JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID` 并由用户真实飞书登录验证；② `--force` **未在任何数据上执行**（按任务包，真实重置由 WorkBuddy 部署后按用户指令执行），其 mysql-client/docker 通道未实测；③ 条件②为**全局**判定，共享测试库上 TC① 带 3 次重试＋快照还原（窗口毫秒级，与既有 m2 全局改置用例同口径）。
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-18 16:05
 
 ## 5. 已决议
 
