@@ -2022,8 +2022,24 @@
 
 - ★ **提交**：显式路径、**只本地提交**（`bebaf17` 代码 ＋ 本回执另行一提），**不 push**。
 - ★ **如实声明的未做项 / 需用户知悉**：① TC①③④ 的飞书路径在测试服务器以**进程内假飞书端点**执行（真实 code 无法 curl 模拟）——清库后现网首登生效，需 WorkBuddy 移除 `JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID` 并由用户真实飞书登录验证；② `--force` **未在任何数据上执行**（按任务包，真实重置由 WorkBuddy 部署后按用户指令执行），其 mysql-client/docker 通道未实测；③ 条件②为**全局**判定，共享测试库上 TC① 带 3 次重试＋快照还原（窗口毫秒级，与既有 m2 全局改置用例同口径）。
-- **状态**：MIMO-DONE
+- **状态**：AGREED
 - **最后更新**：2026-10-18 16:05
+
+**★★★ WorkBuddy 独立验收 · 2026-10-18 19:30 —— 通过，`N-025` → `AGREED`；**清库重置已按用户指令执行完毕**
+
+★ 不采信自报：门禁复跑 ＋ 代码审查 ＋ **真实重置执行与状态验证**。
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| **G1** 门禁必绿 | ✅ | 复跑 ⇒ 必绿 11/11 全绿 |
+| **G2** D1 bootstrap 实现 | ✅ | 代码审查（handlers.go:298-351）：**feishu_login ＋ 专用变量未配置 ⇒ 事务内绑定＋审计**；**绑定在角色查询之前（登录即有权限）**；dev 路径零调用 |
+| **G3** ★ reset 脚本 | ✅ | dry-run 列 36 张表行数；`--force` 执行 ⇒ **mysqldump 备份落 `/root/jx-lab-trace/backups/jx_lab_trace_20261018_161631.sql`** → 36 表 TRUNCATE → 校验 |
+| **G4** ★ 清空校验 | ✅ | **36 张表行数全部＝0**（业务 b_* ×23＋批次＋主数据＋**m_user**＋s_user_role＋s_session＋s_audit_log） |
+| **G5** ★ 三保留表未动 | ✅ | s_permission_point **51** / s_role **6** / s_role_permission **306**（执行前后一致） |
+| **G6** ★ dev 不触发 bootstrap | ✅ | **实测：清库后 dev 登录 ⇒ 403 未映射**（若 bootstrap 被 dev 触发则应有 sysadmin 绑定 ⇒ 登录成功）——红线实测成立 |
+| **G7** 部署/环境 | ✅ | `bebaf17` 无 dirty；`.env` 已移除 `JX_BOOTSTRAP_SYS_ADMIN_OPEN_ID`（mimo 测试残留，会禁用首登自动绑定）与既有 `JX_BOOTSTRAP_ADMIN`（防启动引导抢占），备份留档 |
+
+**结论：`N-025` 验收通过 → `AGREED`**。★ **清库重置已按用户指令执行完毕**——系统现处于「无任何 sysadmin、等首个飞书登录引导」状态；**用户飞书登录即自动成为系统管理员**（审计 bootstrap_sysadmin），随后同步同事/绑角色，功能实验开跑。
 
 ## 5. 已决议
 
