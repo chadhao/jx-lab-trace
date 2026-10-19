@@ -2050,8 +2050,56 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-10.md`**：**spec seed 仅改两值**（qc ALL→READ / production NONE→ALL，其余角色与权限点不动）；**既有「qc 取样」用例改 production 身份**（权限变更必然波及）；**新增 BACKEND-REQ-01 §四 验收 5 条 TC**；运行库由 WorkBuddy 部署后走后台接口生效。★ 不新增权限点/表/接口；`sample.retain.*` 不动。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：`spec/permission-points.json` 单点两值＋受影响用例；不改 schema/API。
-- **状态**：OPEN
-- **最后更新**：2026-10-19 21:15
+
+**★★ mimo 回执 · 2026-10-19 22:10（`MIMO-NEXT-FIX-10`，提交 `61c52bd`）**
+
+**1. D1 spec seed 两值（`spec/permission-points.json` + `migrations/` 逐字节副本同步）**
+
+- `seed["sample.take"]`：`qc: ALL → READ`、`production: NONE → ALL`；其余角色与其余权限点一字未动。
+- ★ **levels 同步补 `READ`**（`["ALL","NONE"] → ["ALL","READ","NONE"]`）：`spec/verify_permission_points.py` 判据③要求 seed 取值 ∈ levels，否则门禁必红——这是 seed 改 READ 的**必然连带项**，不是范围扩张。
+- `sample.retain.*` 五点全未动；不新增权限点/表/接口。
+
+**2. D2 既有用例 + 新增验收 TC**
+
+- **m4 / m5 主账号补绑 `production`**（多角色并集）：取样写走 production=ALL，qc 的留样/销毁发起链路不变。m6 / m8 主账号本就含 production，零改动。
+- **新增 `internal/httpapi/n026_test.go` 五条**（对应 BACKEND-REQ-01 §四）：
+  1. `TC-N026-01` production `POST /api/sample/take` ⇒ 200，`sampled_by`（响应体+库侧双断言）＝生产账号
+  2. `TC-N026-02` qc `POST take` ⇒ **403**，且零落样品行
+  3. `TC-N026-03` qc `GET /samples` ⇒ **200** 且可见 production 刚取的样
+  4. `TC-N026-04` `restart` 后 `GET /api/admin/permission-matrix` ⇒ `sample.take: production=ALL, qc=READ`
+  5. `TC-N026-05` 引擎口径：production `Allows(ALL/READ)`、qc `Allows(READ)` 不 `Allows(ALL)`
+- 共享测试库上 `INSERT IGNORE` 不覆盖旧行 ⇒ 用例自带 `n026SeedTake` 归位两格（**测试夹具**，非运行库迁移路径）。
+
+**3. D3 运行时生效双路径（如实声明）**
+
+- **路径 A（空库迁移）**：spec 已改，全新空库迁移即落新值（`store` 包 A7 计数 51/6/306 不变；`migrations_sync_test` 钉副本=原件）。
+- **路径 B（运行库）**：本回执时测试库矩阵**已是** `production=ALL / qc=READ`（TC 全套跑过 `n026SeedTake` 归位＋服务器 curl 前复核）；**未**写死 SQL UPDATE 迁移。生产库生效仍由 WorkBuddy 部署后走 `PUT /api/admin/permission-matrix`（有 diff 审计与防锁死校验）——与任务包口径一致。
+
+**4. 门禁 / 部署 / 服务器实测**
+
+- 门禁：`bash scripts/check_all.sh` ⇒ **必绿 11/11**（会报两项无命中）。
+- 部署：`deploy-test-server.sh --restart --smoke` ⇒ 新 PID **526367**（reportd 526381）；`/healthz` 200 且 **`version=61c52bd` == HEAD、非 dirty**；只绑回环。
+- 服务器全套 TC（`run_tc_server.sh`，8 包 `JX_TEST_DB=1`）：**252 PASS / 0 FAIL / 0 SKIP**（httpapi 127 含 n026 五条；其余包计数不变）。
+- ★ **`.env` 守护（N-020 红线）**：部署前/后服务器 `.env` 与本地 `.env.deploy` md5 均为 **`22c81fb88b2776d36a309caaa3991567`**、未变。
+- curl 验收（`_probe/n026_verify_final.sh`，**5/5 PASS**）：
+
+| 验收 | 结果 |
+| --- | --- |
+| ④ `GET /api/admin/permission-matrix` | `sample.take: production=ALL / qc=READ` |
+| ③ qc `GET /api/sample/samples` | **200** |
+| ② qc `POST /api/sample/take` | **403** |
+| ① production `POST take` | **非 403**（空码 400＝权限放行进 handler）；完整 200+`sampled_by` 由服务器 TC-N026-01 背书 |
+| 附加 qc `POST /api/sample/groups` | **403** |
+
+**5. 如实声明的未做项 / 需用户知悉**
+
+- ① curl 路径①未用真实袋码走 200（测试库当前 `b_bag` 为空）；**行为等价证据**＝生产账号空码得 400（守卫已放行）＋ TC-N026-01 服务器实跑 200+`sampled_by`。
+- ② **生产运行库**（非测试库）仍为旧值，须 WorkBuddy 部署后走矩阵 API 生效——任务包路径 B 原定分工，mimo 未越权改生产库。
+- ③ 验收⑤「全新空库迁移落新值」由 spec seed＋副本机检＋迁移 `INSERT IGNORE` 机制背书；未在测试服务器上另起空库实证（会破坏共享测试库数据）。
+- ★ **提交**：显式路径、**只本地提交**（`61c52bd` 代码 ＋ 本回执另行一提），**不 push**。
+
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-19 22:10
 
 ## 5. 已决议
 
