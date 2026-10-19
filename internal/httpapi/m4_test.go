@@ -2,8 +2,9 @@ package httpapi
 
 // ===== M4 取样与留样 · 接口级 TC =====
 //
-// ★ 账号：qc（sample.take/retain.in/retain.lend=ALL、destroy.init=INIT、
-//	destroy.approve=NONE）＋ management（destroy.approve=APPROVE）＋
+// ★ 账号：qc（retain.in/retain.lend=ALL、destroy.init=INIT、
+//	destroy.approve=NONE；sample.take=READ —— N-026）＋ production（sample.take=ALL）
+//	＋ management（destroy.approve=APPROVE）＋
 //	receiver（借收货链路造车/袋，与批 3 同手法）。
 // ★ 按 docs/05：DB 集成测试，本机未设 JX_TEST_DB=1 一律 Skip。
 // ★ 固定测试主数据（客户 9402 / 物料 9402），跑前跑后各清一次（先子后父、按账号精确）。
@@ -87,8 +88,9 @@ VALUES (?, 'M4接口测试原料', '原料', '启用', 1, 1, ?)`, m4HTTPMatCode,
 	}
 	t.Cleanup(func() { m4HTTPWipe(t, st) })
 
-	// qc 才有取样/留样权限；receiver 提供收货链路（造车/袋）——多角色取并集
+	// production 取样写（N-026）；qc 留样/销毁发起；receiver 收货链路——多角色取并集
 	bindRole(t, st, m4HTTPOpenID, "qc")
+	bindRole(t, st, m4HTTPOpenID, "production")
 	bindRole(t, st, m4HTTPOpenID, "receiver")
 	bindRole(t, st, m4MgmtOpenID, "management")
 

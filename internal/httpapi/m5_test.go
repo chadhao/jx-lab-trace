@@ -2,8 +2,8 @@ package httpapi
 
 // ===== M5 检测 · 接口级 TC（TC-M5-01~14）=====
 //
-// ★ 账号：qc（insp.* 写入链路 ALL + urgent init INIT + sample.take + receiver 收货链路）
-//	＋ management（urgent approve APPROVE）＋ production（dept_sign ALL）。
+// ★ 账号：qc（insp.* 写入链路 ALL + urgent init INIT + sample.take=READ + receiver 收货链路）
+//	＋ production（dept_sign ALL + sample.take=ALL —— N-026）＋ management（urgent approve APPROVE）。
 // ★ 按 docs/05：DB 集成测试，本机未设 JX_TEST_DB=1 一律 Skip。
 // ★ 夹具纪律（§6-23）：清理**按账号精确匹配**、**先子表后父表**；
 //	断言「某表有几个」一律**限定本用例作用域**，不全库 COUNT(*)。
@@ -139,9 +139,10 @@ VALUES (?,?,?,0,100,'启用',1,1,?)`, item1, custID, matID, m5HTTPOpenID); err !
 
 	t.Cleanup(func() { m5HTTPWipe(t, st) })
 
-	// qc 走完整检测链路 + 收货/取样（造车与大样）；management 批紧急放行；production 双签
+	// qc 走完整检测链路 + 收货；production 取样写（N-026）；management 批紧急放行；production 双签
 	bindRole(t, st, m5HTTPOpenID, "qc")
 	bindRole(t, st, m5HTTPOpenID, "receiver")
+	bindRole(t, st, m5HTTPOpenID, "production")
 	bindRole(t, st, m5MgmtOpenID, "management")
 	bindRole(t, st, m5ProdOpenID, "production")
 

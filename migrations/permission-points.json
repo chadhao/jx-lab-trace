@@ -41,7 +41,7 @@
     { "code": "recv.label.reprint", "module": "收货", "name": "标签补打（须填原因）", "levels": ["ALL", "NONE"] },
     { "code": "recv.return", "module": "收货", "name": "退车执行登记", "levels": ["ALL", "READ", "NONE"] },
 
-    { "code": "sample.take", "module": "取样", "name": "扫码取样（份样 / 大样 / 保留样）", "levels": ["ALL", "NONE"] },
+    { "code": "sample.take", "module": "取样", "name": "扫码取样（份样 / 大样 / 保留样）", "levels": ["ALL", "READ", "NONE"] },
     { "code": "sample.retain.in", "module": "取样", "name": "留样入库（位置 / 保留期限）", "levels": ["ALL", "NONE"] },
     { "code": "sample.retain.lend", "module": "取样", "name": "留样借出 / 归还登记", "levels": ["ALL", "READ", "NONE"] },
     { "code": "sample.retain.destroy.init", "module": "取样", "name": "留样销毁 · 发起", "levels": ["INIT", "NONE"] },
@@ -104,7 +104,7 @@
     "recv.label.reprint":         { "receiver": "ALL", "qc": "NONE", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
     "recv.return":                { "receiver": "ALL", "qc": "READ", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
 
-    "sample.take":                { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
+    "sample.take":                { "receiver": "NONE", "qc": "READ", "production": "ALL", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
     "sample.retain.in":           { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
     "sample.retain.lend":         { "receiver": "NONE", "qc": "ALL", "production": "NONE", "management": "READ", "sales": "READ", "sysadmin": "NONE" },
     "sample.retain.destroy.init":    { "receiver": "NONE", "qc": "INIT", "production": "NONE", "management": "NONE", "sales": "NONE", "sysadmin": "NONE" },
