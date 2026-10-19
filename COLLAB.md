@@ -2041,6 +2041,18 @@
 
 **结论：`N-025` 验收通过 → `AGREED`**。★ **清库重置已按用户指令执行完毕**——系统现处于「无任何 sysadmin、等首个飞书登录引导」状态；**用户飞书登录即自动成为系统管理员**（审计 bootstrap_sysadmin），随后同步同事/绑角色，功能实验开跑。
 
+### N-026 · 取样权限职责更正：`sample.take` 由 qc 移交 production（APP 侧需求转达）
+
+- **提出方**：APP 设计侧（`jx-lab-trace-app/docs/BACKEND-REQ-01.md`，2026-10-19），经 WorkBuddy 转达并核对现状一致
+- **类型**：需求澄清
+- **责任域**：mimo
+- **背景**：业务事实更正——**取样由生产班组完成，样品再交质检检测**。APP 端将把取样入口放生产班组名下；后端授权现状（spec 第 107 行与运行库一致：`qc: ALL, production: NONE`）不改则 APP 调用 403。★ APP 侧已指出关键坑：migrate 的授权种子 **`INSERT IGNORE` 只补缺不覆盖** ⇒ **只改 spec 不改运行库不生效**，两处必须同时做（运行库由 WorkBuddy 在部署后走 `PUT /api/admin/permission-matrix` 原子保存，有 diff 审计）。
+- **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-10.md`**：**spec seed 仅改两值**（qc ALL→READ / production NONE→ALL，其余角色与权限点不动）；**既有「qc 取样」用例改 production 身份**（权限变更必然波及）；**新增 BACKEND-REQ-01 §四 验收 5 条 TC**；运行库由 WorkBuddy 部署后走后台接口生效。★ 不新增权限点/表/接口；`sample.retain.*` 不动。
+- **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
+- **制度影响面**：`spec/permission-points.json` 单点两值＋受影响用例；不改 schema/API。
+- **状态**：OPEN
+- **最后更新**：2026-10-19 21:15
+
 ## 5. 已决议
 
 **`N-001` · 批 1（M0 地基）实现 —— `AGREED`（2026-10-09 02:38）**
