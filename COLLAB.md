@@ -2184,8 +2184,31 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-12.md`**：**D1** `handleFeishuExchange` 加 `source:"sdk"` 分支（passport 端点＋无 redirect_uri；source 空＝现行为——**callback 兼容红线**；code_verifier P1）＋ **D2** `ErrLoginDenied` 拒绝路径 Warn 日志（含实际换到的 open_id/name——APP 侧排查实锤手段）＋ **D3** 兼容红线回归（callback/dev/三错误分支/首登 bootstrap 照常）＋ **D4** 分层测试（**无法构造真实 SDK code**：单测断言请求构造端点/参数/无 redirect_uri＋passport 响应形状解析；真机端到端由 APP 重试，如实声明为未做项）＋ **D5** 交付。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：仅 feishu.go＋handlers.go 的 exchange 路径；callback/dev 行为一字不改。
-- **状态**：OPEN
-- **最后更新**：2026-10-21 02:40
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-21 03:06
+
+**★★★ mimo 回执 · 2026-10-21 03:06 —— D1–D5 全部交付，状态 `MIMO-DONE`（替换）**
+
+**交付**：本地提交 **`5d07c43`**（**只本地提交不 push**）。部署测试服务器，`/healthz` = `{"version":"5d07c43",...}` ＝ HEAD **无 dirty**。★ `.env` 红线：`.env.deploy` md5 前后一致（`ABE7A05DB108485E8DCCFA3A90558A9D`），部署用已提交 commit。
+
+| 项 | 交付 | 要点 |
+|---|---|---|
+| **D1 source 分支** | `handleFeishuExchange` 加 `source` ＋ `access.ExchangeSDK` | 请求体 `source:"sdk"` ⇒ `POST https://passport.feishu.cn/suite/passport/oauth/token`（`Content-Type=x-www-form-urlencoded`；参数 grant_type/client_id/client_secret/code 四项；★**不传 redirect_uri**——官方 app-login 文档 2026-10-21 核对：移动端登录 redirect_uri 非必填、网页登录才必填）；`source` 空/其它 ⇒ **v2＋redirect_uri 现行为一字不变**（callback/exchange 兼容红线）；token 响应**四字段并集解析两形状兼容**（passport 平铺成功体无外层 code/msg、错误体实测 `code=0 msg=…`；v2 `code=20003`；OAuth2 `error/error_description` 三种均走同一 `ErrAuthCodeRejected` 哨兵）；user_info 共用 `/open-apis/authen/v1/user_info`；**挑战码 code_verifier P1 暂缓**（任务包口径） |
+| **D2 拒绝日志** | `ErrLoginDenied` 分支 `c.Logger().Warn("exchange 拒绝: open_id=", ident.OpenID, " name=", name)` | 仅诊断日志，**403 响应结构/流程一字不改**。★ **动因附带修复**：echo 默认 logger `SetLevel(ERROR)`（echo.New 内）实测 **Warn 零输出**（既有换 token 失败 Warn 同样被吞）⇒ `Handler()` 降为 **WARN 级**——仅日志可见性，响应/流程/错误语义不变（TC-N028-03 实证：日志含实际 open_id ＋ 403 契约不变；生产 app.log 实证 `level=WARN` 落盘） |
+| **D3 兼容红线** | callback / dev / exchange 三错误分支零改动 | diff **只增不改**（callback 函数体未触碰）；TC-N027-06（callback 302＋dev 登录）、TC-N027-02/03/04（401/403 userMessage/502）回归全绿；**首登 bootstrap 照常**——新增 TC-N028-04：`source=sdk` 首登获 sysadmin＋`X-JX-Bootstrap-Sysadmin`＋审计 `feishu_login` |
+| **D4 测试** | access 2 条 ＋ httpapi 4 条 | 分层验证见下 |
+
+**分层验证（D4，★ 无法构造真实 SDK code ⇒ 分层兜底）**：
+
+- **单测（access，本机门禁实跑）**：SDK 分支**请求构造逐字段**——默认端点常量断言＝`passport.feishu.cn/suite/passport/oauth/token`（不得落 v2）、mock 断言 POST／x-www-form-urlencoded／四参数齐／★**无 redirect_uri**；**passport 官方文档 Response Sample 成功向量**解析通过＋错误两形状（OAuth2、code+msg）同哨兵；网页流 `Exchange` 回归断言（仍 JSON＋redirect_uri）。
+- **单测（httpapi，服务器 `JX_TEST_DB=1` 实跑）**：TC-N028-01 `source` 空/其它 ⇒ **v2 双命中**且回 redirect_uri（N-027 请求形态回归）；TC-N028-02 `source=sdk` ⇒ **passport 命中 1、v2 命中 0**、form 四参数、★无 redirect_uri；TC-N028-03 **拒绝路径 Warn 日志含实际 open_id**（echo SetOutput 捕获）＋403 `error/userMessage` 契约一字不变；TC-N028-04 `source=sdk` 首登 bootstrap（对齐 TC-N027-05 换分支重演）。
+- **服务器全套 TC**：**270 PASS / 0 FAIL / 0 SKIP**（access 11、httpapi 143、store 93、其余 23；较 FIX-11 净增 **+6**＝access 2＋httpapi 4）。
+- **curl 回归（部署 `5d07c43` 后实测）**：exchange 无 source 假 code ⇒ **401** `{"error":"授权码无效或已过期"}`；**`source=sdk` 假 code ⇒ 401**（★实测打到**真实 passport 端点**并正确解析——服务器日志 WARN 实锤：`code=0 msg=The code is not found. error=invalid_grant`，与 v2 的 `code=20003` 形状不同、四字段并集解析兼容）；缺 code ⇒ 401；`/feishu/start` ⇒ **302** 授权跳转（callback 流程首跳完好）；callback 无 code ⇒ 400 友好页、假 code ⇒ 502 友好页（现行为）；dev 登录未映射 ⇒ **403** deny-by-default、缺省账号 ⇒ 200。★ callback **成功** 302 场景需真实 code ⇒ 由服务器 TC 假飞书 mock 钉住（TC-N027-06 全绿）。
+- **日志修复生产实证**：`logs/app.log` 落有 `level=WARN` 三条（exchange/callback 换 token 失败路径）——修复前该级别被 echo 默认 ERROR 阈值吞掉。
+
+**门禁**：`check_all.sh` **11/11 全绿**。
+
+**未做项（如实声明）**：① ★ **真机 SDK code 端到端验证由用户/APP 侧执行**——部署 `5d07c43` 后即解锁（APP 重试登录 ⇒ 200＋Set-Cookie 即实锤）；本交付无法构造真实 SDK code，已按 D4 分层验证兜住请求构造/响应形状/路由/拒绝日志；② 挑战码 code_verifier＝P1 暂缓（任务包口径）；③ user_info 兼容性由服务器 TC（同一 `/open-apis/authen/v1/user_info` 两种 token mock 均过）背书，**真机 token 实测待 ① 一并确认**，若不兼容再开议题改用移动端文档指定的用户信息端点并回执。
 
 ## 5. 已决议
 
