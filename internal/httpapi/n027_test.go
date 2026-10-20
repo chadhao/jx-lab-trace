@@ -249,9 +249,18 @@ func n027FakeFeishu(t *testing.T, openID, name, tokenBody string) (*access.Feish
 }
 
 // n027Exchange POST /api/auth/feishu/exchange，返回状态码、响应头与响应体。
+// ★ 自发请求（不经 e.do）：e.do 会消费 body 并丢弃原始文本，这里要断言原文与响应头。
 func n027Exchange(t *testing.T, e *env, body string) (int, http.Header, string) {
 	t.Helper()
-	resp, _ := e.do("POST", "/api/auth/feishu/exchange", "", body)
+	req, err := http.NewRequest("POST", e.srv.URL+"/api/auth/feishu/exchange", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := e.srv.Client().Do(req)
+	if err != nil {
+		t.Fatalf("请求失败: %v", err)
+	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, resp.Header, string(raw)
@@ -588,16 +597,16 @@ func TestTC_N027_09_Shipment_WeightAggregation(t *testing.T) {
 
 	batch, _ := n027BatchFixture(t, e.st, cust, outMat, "01")
 	lot, lotCode := n027LotFixture(t, e.st, batch, cust, outMat, "001")
-	// 三袋：10.5 + 20.0 + 5.0；随后把第二袋作废
+	// 三袋：10.5 + 20.0 + 5.0；建单后把第二袋作废（归集时袋须在库 —— 作废发生在归集后）
 	bags := n027BagFixture(t, e.st, lot, lotCode, []float64{10.5, 20.0, 5.0})
-	if _, err := e.st.DB().ExecContext(ctx,
-		`UPDATE b_fg_bag SET status = '作废' WHERE code = ?`, bags[1]); err != nil {
-		t.Fatalf("作废袋失败: %v", err)
-	}
 
 	raw, _ := json.Marshal(map[string]interface{}{"bag_codes": bags, "remark": "B-req-1"})
 	row := n027Ship(t, e, ck, string(raw))
 	shipID := numOf(row["id"])
+	if _, err := e.st.DB().ExecContext(ctx,
+		`UPDATE b_fg_bag SET status = '作废' WHERE code = ?`, bags[1]); err != nil {
+		t.Fatalf("作废袋失败: %v", err)
+	}
 
 	resp, body := e.do("GET", fmt.Sprintf("/api/ship/shipments/%d", shipID), ck, "")
 	if resp.StatusCode != http.StatusOK {
