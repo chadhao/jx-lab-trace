@@ -2127,8 +2127,36 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-11.md`**（D1 exchange ＋ D2–D5 B-req 四项 ＋ D6 测试 ＋ D7 交付）。★ **exchange 必须走同一 openSession/bootstrap 链**（清库后 APP 首登也要能拿 sysadmin）；★ callback/dev 行为一字不改；★ redirect_uri 一致性风险必须实测并回执；★ 不新增权限点。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：新增一个登录端点＋若干既有接口的入参/响应扩展；不改 `spec/` 冻结口径。
-- **状态**：OPEN
-- **最后更新**：2026-10-20 19:20
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-20 21:05
+
+**★★★ mimo 回执 · 2026-10-20 21:05 —— D1–D7 全部交付，状态 `MIMO-DONE`（替换）**
+
+**交付**：本地提交 **`f82dba0`**（交付 `86195ea` ＋ TC 修复 `f82dba0`；**只本地提交不 push**）。部署测试服务器，`/healthz` = `{"version":"f82dba0",...}` ＝ HEAD **无 dirty**。★ `.env` 红线：`.env.deploy` md5 前后一致（`ABE7A05DB108485E8DCCFA3A90558A9D`），部署用已提交 commit。
+
+| 项 | 交付 | 要点 |
+|---|---|---|
+| **D1 exchange** | `POST /api/auth/feishu/exchange` | 复用 `s.Feishu.Exchange`＋`openSession(how="feishu_login")` 全链：deny-by-default、**首登 bootstrap 同触发**（清库后 APP 首登可拿 sysadmin，TC-N027-05 服务器实证）、审计 `feishu_login`、TTL 12h（Max-Age=43200）；成功 `Set-Cookie`＋`{"ok":true}`；**state 不透明忽略不回显**；401（`access.ErrAuthCodeRejected` 哨兵）／403 带契约 `userMessage:"您的账号尚未分配角色，请联系综合运营部"`（停用账号另给文案）／502（详情只进服务端日志，map 形态绕过 5xx 打码但不泄内部） |
+| **D2 建单车辆** | `CreateShipmentInput` ＋可选 `vehicle_id/plate_no/driver` | 落库 `b_shipment` 单头（列本就存在）；★ **谱系车次自动预填已做**（`truckContextForFgBagTx`：E袋→D批→C批→`b_feed_record`→B袋→A车次→车辆档案，一条 JOIN，与谱系查询同代价；入参三字段全空才预填，APP 端仍可改） |
+| **D3 净重聚合** | 详情响应扩展 | 明细每行 `weight_allocated`（**JOIN 的是 `b_fg_bag`**——出货明细 `fg_bag_id` 外键指向成品袋表；任务包写 `b_bag` 是原料吨袋表，按 schema 更正）；单头 `net_weight_total`＝Σ有效袋摊算重，**作废袋不计**（`status<>'作废'`）；列表接口保持轻量**不带**汇总（声明） |
+| **D4 追溯扩展** | `/trace/batch` ＋ `backward` | ① batch 入口：数字 id 直用／C 码（全码+人读行）按 code 查 `b_production_batch`／其它类型码 **400「此入口请扫生产批码（C）…」**；② `backward` 支持 **E 码**（袋→所属成品批→既有反向链）；`forward` 保持 B 码不变 |
+| **D5 生产批作废** | `PATCH /api/prod/batches/:id/void` | 限制＝**`b_feed_record` 中无该批记录**（口径：现存投料记录，物理删除后可作废——如实声明）；已投料⇒409 `ErrBatchFed`；已完成⇒409；已作废再作废⇒409（**幂等语义＝明确报错不静默成功**）；权限挂 **`prod.batch.create` ALL**（批生命周期写操作同域；**不新增权限点**）；审计 `action=void`；**作废后谱系/档案仍可见**（status 如实标注「已作废」，不隐藏历史） |
+
+**redirect_uri 一致性实测（D1-5 ★★）**：真凭据＋假 code 实测 `POST open.feishu.cn/.../authen/v2/oauth/token` ⇒ `{"error":"invalid_grant","code":20003,"error_description":"The authorization code is not found..."}` —— **code 存在性先于 redirect_uri 一致性校验**，假 code 无法证伪一致性风险 ⇒ **exchange 入参增加可选 `redirect_uri`**（APP 回传其 applink authorize 所用 deep-link；缺省回落本服务 callback URI）。curl 实测可选字段被接受（假 code ⇒ 401 非 400）。
+
+**PKCE 核实结论（D1-6 ★）**：飞书 v2 `oauth/token` 官方文档未列 `code_verifier`；实测传入被**静默忽略**（仍回 code 20003，无参数错误）⇒ **待飞书能力，APP 侧 P1 暂缓，不阻塞上线**。exchange **未实现** code_verifier（如飞书后续支持再开议题）。
+
+**限速（D1-7）**：与现有 auth 端点同策略——**现状无专门限速**，本端点不新造（声明）。
+
+**测试（D6）**：`internal/httpapi/n027_test.go` 十二条 TC，服务器 `JX_TEST_DB=1` 实跑 **全绿**；全套 TC **264 PASS / 0 FAIL**（httpapi 139、store 93、其余 32；较上轮净增 12 条）。覆盖：exchange 成功（Set-Cookie 逐属性断言 HttpOnly/SameSite=Lax/Max-Age=43200＋`{"ok":true}`＋state 不回显）／401／403 带 userMessage／502 不外泄／**bootstrap 触发**（清库态首个 exchange 登录者获 sysadmin＋审计）／dev 登录不受影响＋**callback 302 回归**／建单车辆落库可查／谱系预填／净重口径（作废袋不计 15.5=10.5+5.0）／C 码进 batch＋人读行＋数字 id 回归＋E 码 400 文案／E 码 backward 谱系（E→D→C→投料）＋D 码回归＋B 码 400 文案／作废全分支（成功/已投料409/已完成409/重复409/权限403）。
+
+**curl 实测（D7）**：① exchange 全错误分支——假 code ⇒ **401** `{"error":"授权码无效或已过期"}`（真飞书上游 invalid_grant）；缺 code ⇒ 401；可选 redirect_uri 被接受 ⇒ 401 非 400。② B-req 各一正例（真实 API 链）——**B-req-4** 建批→作废 200 `{"voided":true}`＋重复作废 409；**B-req-3** C 码进 `/api/trace/batch` 200 且已作废批仍可见 `status=已作废`；**B-req-2** 建单带车辆落库 `plate_no=N027CURL`；**B-req-1** 详情含 `net_weight_total=30`＋明细 `weight_allocated`（net_weight=30 ÷ 2 袋＝15 每袋，生成接口摊算）。③ 403 userMessage 需真实授权码（假 code 到不了 openSession）——由 TC-N027-03 服务器实跑覆盖。
+
+**门禁**：`check_all.sh` **11/11 全绿**。
+
+**兼容性红线**：`GET /feishu/callback` 与 `JX_DEV_MODE` **一字不改**（diff 只增不改；TC-N027-06 钉住 callback 302＋dev 登录 200）。
+
+**未做项（如实声明）**：① PKCE code_verifier——待飞书能力（见上）；② 净重列表汇总——列表接口保持轻量未加（详情已带）；③ exchange 403 的「停用」分支与「无角色」分支共用 403 码、userMessage 分开给。
 
 ## 5. 已决议
 
