@@ -2118,6 +2118,18 @@
 
 **结论：`N-026` 验收通过 → `AGREED`**。★ **APP 侧真机联调解锁**：取样入口（生产班组）不再 403；职责分离生效（`sampled_by` 将记生产人员）。
 
+### N-027 · APP 后端需求 02/03：Applink 交换端点 ＋ B-req 四项增强（一次交付）
+
+- **提出方**：APP 设计侧（`jx-lab-trace-app/docs/BACKEND-REQ-02.md`、`BACKEND-REQ-03.md`，2026-10-20），经 WorkBuddy 转达并完成后端现状侦察
+- **类型**：需求澄清
+- **责任域**：mimo
+- **背景**：REQ-03（**高**）：APP 登录升级为 Applink 拉起飞书授权，需新增 **`POST /api/auth/feishu/exchange`**（JSON code/state ⇒ 复用现有 Exchange＋openSession 链路 ⇒ Set-Cookie ＋ `{"ok":true}`；401/403(带 userMessage)/502 错误语义；**兼容 callback 与 dev 模式**；state 为 APP 侧 CSRF 不透明忽略；PKCE 为 P1——先核飞书接口支持）。REQ-02（可选增强四项，用户授权全做）：**B2** 建出货单携带车辆（★ `b_shipment` 已有列，仅缺建单入参）；**B1** 出货单净重聚合（items JOIN b_bag 的 weight_allocated ＋ 单头 net_weight_total）；**B3** 追溯入口扩展（/trace/batch 支持 C 码解析；backward 支持 E 码；codec 六类码解析已齐，瓶颈在 handler 准入检查）；**B4** 生产批作废接口（`b_production_batch.status` 已含「已作废」，缺接口；限未投料，挂现有 prod.* 点）。
+- **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-11.md`**（D1 exchange ＋ D2–D5 B-req 四项 ＋ D6 测试 ＋ D7 交付）。★ **exchange 必须走同一 openSession/bootstrap 链**（清库后 APP 首登也要能拿 sysadmin）；★ callback/dev 行为一字不改；★ redirect_uri 一致性风险必须实测并回执；★ 不新增权限点。
+- **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
+- **制度影响面**：新增一个登录端点＋若干既有接口的入参/响应扩展；不改 `spec/` 冻结口径。
+- **状态**：OPEN
+- **最后更新**：2026-10-20 19:20
+
 ## 5. 已决议
 
 **`N-001` · 批 1（M0 地基）实现 —— `AGREED`（2026-10-09 02:38）**
