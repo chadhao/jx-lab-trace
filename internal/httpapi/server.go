@@ -12,6 +12,7 @@ import (
 	"github.com/chadhao/jx-lab-trace/internal/permission"
 	"github.com/chadhao/jx-lab-trace/internal/store"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/gommon/log"
 )
 
 // Server 装配路由。
@@ -43,6 +44,11 @@ func (s *Server) Handler() *echo.Echo {
 	e := echo.New()
 	e.HideBanner = true
 	e.HTTPErrorHandler = jsonErrorHandler(e)
+	// ★★ N-028 D2 动因：echo 默认 logger 级别＝ERROR（echo.New() 内 SetLevel(ERROR)），
+	//   实测 2026-10-21：c.Logger().Warn(...) 零输出 ⇒ 既有 Warn（换 token 失败）与
+	//   本次 D2「exchange 拒绝」诊断日志会被静默吞掉、排查永远看不到实锤。
+	//   降为 WARN 只影响日志可见性（响应/流程/错误语义一字不变）；Debug/Info 仍抑制。
+	e.Logger.SetLevel(log.WARN)
 
 	// ① 会话中间件：解析 cookie → 装载主体 → 滑动续期（服务端 + cookie 同批）
 	e.Use(access.SessionMiddleware(s.Store, s.Opts))

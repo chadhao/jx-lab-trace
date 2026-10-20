@@ -14,6 +14,7 @@ import (
 
 	"github.com/chadhao/jx-lab-trace/internal/config"
 	"github.com/chadhao/jx-lab-trace/internal/store"
+	"github.com/labstack/echo/v4"
 )
 
 // ===== 测试基座 =====
@@ -93,8 +94,10 @@ type env struct {
 	cfg *config.Config
 	st  *store.Store
 	api *Server // ★ N-027：测试内覆写 Feishu 等字段用（restart 后指向新实例）
-	srv *httptest.Server
-	ttl time.Duration
+	// ★ N-028：当前 handler 所属 echo 实例（D2 拒绝日志断言要 SetOutput 捕获）。
+	echo *echo.Echo
+	srv  *httptest.Server
+	ttl  time.Duration
 }
 
 func newEnv(t *testing.T, ttl time.Duration) *env {
@@ -126,8 +129,8 @@ func (e *env) serve() {
 		e.srv.Close()
 	}
 	e.api = New(e.cfg, e.st, "test")
-	handler := e.api.Handler()
-	e.srv = httptest.NewServer(handler)
+	e.echo = e.api.Handler()
+	e.srv = httptest.NewServer(e.echo)
 }
 
 // restart 关掉服务与连接，再用**全新连接 + 全新 handler** 起一遍（= 进程重启）。

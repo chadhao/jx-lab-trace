@@ -129,7 +129,7 @@ func (s *Server) handleFeishuCallback(c echo.Context) error {
 
 // handleFeishuExchange Applink 授权码直换会话（N-027 D1，APP 侧 JSON 契约）：
 //
-//	请求  {"code":"<飞书授权码>","state":"<APP 原样回传>","redirect_uri":"<可选>"}
+//	请求  {"code":"<飞书授权码>","state":"<APP 原样回传>","redirect_uri":"<可选>","source":"<可选>"}
 //	成功  Set-Cookie: jx_sid（openSession 下发）+ {"ok":true}
 //	失败  401 code 无效/过期 · 403 角色未映射（带 userMessage）· 502 飞书上游错误
 //
@@ -147,9 +147,15 @@ func (s *Server) handleFeishuCallback(c echo.Context) error {
 //	故入参带可选 redirect_uri（APP 回传其 applink authorize 所用 deep-link）；
 //	缺省回落本服务的 callback URI（与现有 callback 同一缺省）。
 //
+// ★ source（N-028 D1）：APP 显式声明授权来源。"sdk" ⇒ 移动端 SDK 分支，走
+//
+//	passport.feishu.cn/suite/passport/oauth/token 且★不传 redirect_uri（官方
+//	app-login 文档：网页 OAuth v2 端点处理不了移动端 SDK 的 code ⇒ open_id 语义错位
+//	⇒ AUTH_NO_ROLE）；空/其它 ⇒ 保持现行为（v2 端点＋redirect_uri）。
+//
 // ★ PKCE code_verifier：飞书 v2 oauth/token 官方文档未列该参数（实测传入被静默忽略）
 //
-//	⇒ 待飞书能力，APP 侧 P1 暂缓（不阻塞上线）。
+//	⇒ 待飞书能力，APP 侧 P1 暂缓（不阻塞上线）；SDK 分支挑战码同为 P1。
 //
 // ★ 限速：与现有 auth 端点同策略 —— 现状无专门限速，本端点不新造。
 // ★★★ callback 与 JX_DEV_MODE 行为一字不改（兼容性红线）：本函数不触碰二者。
@@ -164,6 +170,7 @@ func (s *Server) handleFeishuExchange(c echo.Context) error {
 		Code        string `json:"code"`
 		State       string `json:"state"`
 		RedirectURI string `json:"redirect_uri"`
+		Source      string `json:"source"` // ★ N-028 D1：显式声明来源；"sdk" ⇒ 移动端 passport 分支
 	}
 	if err := decodeBody(c, &body); err != nil {
 		return err
@@ -176,7 +183,15 @@ func (s *Server) handleFeishuExchange(c echo.Context) error {
 	if redirect == "" {
 		redirect = s.callbackURI(c)
 	}
-	ident, err := s.Feishu.Exchange(c.Request().Context(), code, redirect)
+	var ident access.Identity
+	var err error
+	if strings.TrimSpace(body.Source) == "sdk" {
+		// ★ N-028 D1：移动端 SDK code 走 passport 端点（不传 redirect_uri）。
+		ident, err = s.Feishu.ExchangeSDK(c.Request().Context(), code)
+	} else {
+		// source 空/其它 ⇒ 网页流现行为（v2＋redirect_uri，兼容红线）。
+		ident, err = s.Feishu.Exchange(c.Request().Context(), code, redirect)
+	}
 	if err != nil {
 		// ★ 详情只进服务端日志（err 里可能有上游 code/msg），对外一律不外泄。
 		c.Logger().Warn("飞书 exchange 换 open_id 失败: ", err)
@@ -193,6 +208,9 @@ func (s *Server) handleFeishuExchange(c echo.Context) error {
 	}
 	if _, err := s.openSession(c, ident.OpenID, name, "feishu_login"); err != nil {
 		if errors.Is(err, ErrLoginDenied) {
+			// ★ N-028 D2：拒绝路径诊断日志（APP 侧排查实锤手段，含实际换到的
+			//   open_id/name）—— 响应结构/流程一字不改，仅日志。
+			c.Logger().Warn("exchange 拒绝: open_id=", ident.OpenID, " name=", name)
 			// ★ ErrLoginDenied 覆盖「停用」与「无角色」两种；userMessage 分开给，
 			//   避免停用账号被误导去「申请角色」。
 			userMsg := "您的账号尚未分配角色，请联系综合运营部"

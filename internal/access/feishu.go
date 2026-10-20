@@ -28,6 +28,9 @@ type FeishuClient struct {
 	TokenURLOverride     string
 	UserInfoURLOverride  string
 
+	// ★ N-028 D1 移动端（SDK）token 端点覆写（形状断言测试用；生产不设）。
+	PassportTokenURLOverride string
+
 	// ★ D3 组织同步端点覆写（形状断言测试用；生产不设）。
 	TenantTokenURLOverride   string
 	DeptChildrenURLOverride  string
@@ -54,6 +57,13 @@ const (
 	feishuAuthorizeURL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
 	feishuTokenURL     = "https://open.feishu.cn/open-apis/authen/v2/oauth/token"
 	feishuUserInfoURL  = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+
+	// ★★ N-028 D1 移动端（SDK）token 端点（官方「app-login/get-access_token」，2026-10-21 核对）：
+	//   移动端登录 → passport.feishu.cn/suite/passport/oauth/token，★ 不传 redirect_uri；
+	//   Request Header Content-Type=application/x-www-form-urlencoded。
+	//   ★★ 动因：exchange 曾用网页 OAuth v2 端点（带 redirect_uri）处理移动端 SDK 的 code
+	//   ⇒ 换出 open_id 语义错位 ⇒ AUTH_NO_ROLE（绑定/通讯录/映射均已排查排除）。
+	feishuPassportTokenURL = "https://passport.feishu.cn/suite/passport/oauth/token"
 
 	// ★ D3 组织同步（2026-10-12 按官方文档核对）：
 	//   租户凭据 https://open.feishu.cn/document/server-docs/authentication-management/access-token/tenant_access_token_internal
@@ -101,6 +111,12 @@ func (f *FeishuClient) tokenEndpoint() string {
 	}
 	return feishuTokenURL
 }
+func (f *FeishuClient) passportTokenEndpoint() string {
+	if f.PassportTokenURLOverride != "" {
+		return f.PassportTokenURLOverride
+	}
+	return feishuPassportTokenURL
+}
 func (f *FeishuClient) userInfoEndpoint() string {
 	if f.UserInfoURLOverride != "" {
 		return f.UserInfoURLOverride
@@ -135,10 +151,9 @@ type Identity struct {
 // ★ exchange 端点据此映射 401；callback 对一切错误仍回友好 HTML 502（行为不变）。
 var ErrAuthCodeRejected = errors.New("飞书拒绝了授权码")
 
-// Exchange 用授权 code 换 open_id（回调主流程的第二步）。
+// Exchange 用授权 code 换 open_id（网页流 / 回调主流程的第二步）。
+// ★ N-028 兼容红线：本函数行为一字不改 —— v2 端点 JSON 报文 ＋ redirect_uri。
 func (f *FeishuClient) Exchange(ctx context.Context, code, redirectURI string) (Identity, error) {
-	var ident Identity
-
 	body, _ := json.Marshal(map[string]string{
 		"grant_type":    "authorization_code",
 		"client_id":     f.AppID,
@@ -146,11 +161,45 @@ func (f *FeishuClient) Exchange(ctx context.Context, code, redirectURI string) (
 		"code":          code,
 		"redirect_uri":  redirectURI,
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.tokenEndpoint(), strings.NewReader(string(body)))
+	return f.exchangeAt(ctx, f.tokenEndpoint(), string(body), "application/json")
+}
+
+// ExchangeSDK 移动端（SDK）授权码换 open_id（N-028 D1）。
+//
+// ★ 官方「app-login/get-access_token」：移动端登录 ⇒
+//
+//	POST https://passport.feishu.cn/suite/passport/oauth/token
+//	Content-Type=application/x-www-form-urlencoded
+//	参数 grant_type / client_id / client_secret / code —— ★ 不传 redirect_uri（网页登录才必填）。
+//
+// ★ 挑战码（code_verifier）为 P1 后续扩展，本次不做。
+// ★ user_info 流程与网页流共用（/open-apis/authen/v1/user_info 两种 token 均兼容；
+//
+//	若真机实测不兼容再改用移动端文档指定的用户信息端点并开议题回执）。
+func (f *FeishuClient) ExchangeSDK(ctx context.Context, code string) (Identity, error) {
+	form := url.Values{}
+	form.Set("grant_type", "authorization_code")
+	form.Set("client_id", f.AppID)
+	form.Set("client_secret", f.AppSecret)
+	form.Set("code", code)
+	// ★ 不传 redirect_uri（官方明确移动端登录非必填）。
+	return f.exchangeAt(ctx, f.passportTokenEndpoint(), form.Encode(), "application/x-www-form-urlencoded")
+}
+
+// exchangeAt 是两分支共用链：POST token 端点 → 解析 → user_info 换 Identity。
+//
+// ★ token 响应形状两种兼容（官方 app-login 文档为准）：
+//
+//	passport 成功体是 OAuth2 平铺（顶层 access_token/token_type/expires_in，无 code/msg 外层）；
+//	v2/错误体带 code/msg 或 error/error_description —— 下方四字段并集解析，两分支共用。
+func (f *FeishuClient) exchangeAt(ctx context.Context, tokenURL, body, contentType string) (Identity, error) {
+	var ident Identity
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(body))
 	if err != nil {
 		return ident, err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 
 	resp, err := f.httpClient().Do(req)
 	if err != nil {
