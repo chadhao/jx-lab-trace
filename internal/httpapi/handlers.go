@@ -127,6 +127,88 @@ func (s *Server) handleFeishuCallback(c echo.Context) error {
 	return c.Redirect(http.StatusFound, "/")
 }
 
+// handleFeishuExchange Applink 授权码直换会话（N-027 D1，APP 侧 JSON 契约）：
+//
+//	请求  {"code":"<飞书授权码>","state":"<APP 原样回传>","redirect_uri":"<可选>"}
+//	成功  Set-Cookie: jx_sid（openSession 下发）+ {"ok":true}
+//	失败  401 code 无效/过期 · 403 角色未映射（带 userMessage）· 502 飞书上游错误
+//
+// ★ 复用与 callback 完全相同的两条链：s.Feishu.Exchange（code→open_id）＋
+//
+//	openSession(how="feishu_login")（deny-by-default、首登 bootstrap、审计、TTL 12h）。
+//
+// ★ state：APP 侧 CSRF 防护（生成并内存保存）——后端不接受/不校验其内容，
+//
+//	作为不透明字符串忽略，响应不回显。
+//
+// ★ redirect_uri：飞书 code 换身份接口可能校验与 authorize 时一致（实测假 code 只回
+//
+//	code=20003 invalid_grant，一致性校验在 code 有效后才暴露 ⇒ 无法离线证伪）——
+//	故入参带可选 redirect_uri（APP 回传其 applink authorize 所用 deep-link）；
+//	缺省回落本服务的 callback URI（与现有 callback 同一缺省）。
+//
+// ★ PKCE code_verifier：飞书 v2 oauth/token 官方文档未列该参数（实测传入被静默忽略）
+//
+//	⇒ 待飞书能力，APP 侧 P1 暂缓（不阻塞上线）。
+//
+// ★ 限速：与现有 auth 端点同策略 —— 现状无专门限速，本端点不新造。
+// ★★★ callback 与 JX_DEV_MODE 行为一字不改（兼容性红线）：本函数不触碰二者。
+func (s *Server) handleFeishuExchange(c echo.Context) error {
+	if s.Feishu == nil {
+		// ★ map 形态绕过统一错误处理器的 5xx 打码（对外要给可行动的文案，但不泄内部细节）。
+		return echo.NewHTTPError(http.StatusBadGateway, map[string]interface{}{
+			"error": "登录服务暂未就绪（未配置飞书凭据）",
+		})
+	}
+	var body struct {
+		Code        string `json:"code"`
+		State       string `json:"state"`
+		RedirectURI string `json:"redirect_uri"`
+	}
+	if err := decodeBody(c, &body); err != nil {
+		return err
+	}
+	code := strings.TrimSpace(body.Code)
+	if code == "" {
+		return echo.NewHTTPError(http.StatusUnauthorized, "授权码无效或已过期")
+	}
+	redirect := strings.TrimSpace(body.RedirectURI)
+	if redirect == "" {
+		redirect = s.callbackURI(c)
+	}
+	ident, err := s.Feishu.Exchange(c.Request().Context(), code, redirect)
+	if err != nil {
+		// ★ 详情只进服务端日志（err 里可能有上游 code/msg），对外一律不外泄。
+		c.Logger().Warn("飞书 exchange 换 open_id 失败: ", err)
+		if errors.Is(err, access.ErrAuthCodeRejected) {
+			return echo.NewHTTPError(http.StatusUnauthorized, "授权码无效或已过期")
+		}
+		return echo.NewHTTPError(http.StatusBadGateway, map[string]interface{}{
+			"error": "飞书身份校验未通过",
+		})
+	}
+	name := ident.Name
+	if name == "" {
+		name = ident.OpenID
+	}
+	if _, err := s.openSession(c, ident.OpenID, name, "feishu_login"); err != nil {
+		if errors.Is(err, ErrLoginDenied) {
+			// ★ ErrLoginDenied 覆盖「停用」与「无角色」两种；userMessage 分开给，
+			//   避免停用账号被误导去「申请角色」。
+			userMsg := "您的账号尚未分配角色，请联系综合运营部"
+			if st, e := s.Store.UserStatus(c.Request().Context(), ident.OpenID); e == nil && st == "停用" {
+				userMsg = "您的账号已停用，请联系综合运营部"
+			}
+			return echo.NewHTTPError(http.StatusForbidden, map[string]interface{}{
+				"error":       "未映射任何角色或账号已停用，拒绝登录",
+				"userMessage": userMsg,
+			})
+		}
+		return err
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{"ok": true})
+}
+
 // renderLoginDeniedHTML 输出**极简服务端渲染**的登录拒绝页（D1）。
 // ★ 无 JS、无外部资源、无前端路由依赖 —— 独立成立。
 func (s *Server) renderLoginDeniedHTML(c echo.Context, status int, title, reason string) error {

@@ -46,6 +46,8 @@ var (
 	ErrReworkReason     = errors.New("返工必须填写原因")
 	ErrReworkSrcState   = errors.New("原批当前状态不允许返工")
 	ErrTruckFed         = errors.New("该车已有投料，不能退车")
+	// ★ N-027 B-req-4：生产批作废的前置失败（已投料）。
+	ErrBatchFed = errors.New("该生产批已有投料，不能作废")
 )
 
 // 状态字面量（★ 逐字取自 spec/schema.sql 列注释的中文原词，§6-14）。
@@ -609,6 +611,78 @@ func (s *Store) GetProductionBatch(ctx context.Context, id int64) (ProductionBat
 		return ProductionBatch{}, fmt.Errorf("读取生产批失败: %w", err)
 	}
 	return b, nil
+}
+
+// ProductionBatchIDByCode 按 C 生产批码查 id（N-027 B-req-3：/trace/batch 入口扩展）。
+func (s *Store) ProductionBatchIDByCode(ctx context.Context, code string) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM b_production_batch WHERE code = ?`, code).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, fmt.Errorf("%w：生产批码 %s", ErrProdNotFound, code)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("读取生产批失败: %w", err)
+	}
+	return id, nil
+}
+
+// VoidProductionBatch 作废生产批（N-027 B-req-4）。
+//
+//	限制：仅「建批后未投料」——判定＝ b_feed_record 中无该批记录；
+//	已投料 ⇒ ErrBatchFed（409）；已完成 / 已作废 ⇒ ErrProdState / ErrAlreadyVoid（409）。
+//	幂等语义：已作废再作废 ⇒ 409（明确报错，不静默成功）。
+//	作废后谱系 / 报告仍可见该批（status=已作废 如实标注，不隐藏历史）。
+//	审计照常（appendAuditTx，action=void）。
+func (s *Store) VoidProductionBatch(ctx context.Context, id int64, reason string, actor MDActor) (ProductionBatch, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ProductionBatch{}, fmt.Errorf("开启事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	var status, code string
+	err = tx.QueryRowContext(ctx,
+		`SELECT status, code FROM b_production_batch WHERE id = ? FOR UPDATE`, id).
+		Scan(&status, &code)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProductionBatch{}, fmt.Errorf("%w：生产批 #%d", ErrProdNotFound, id)
+	}
+	if err != nil {
+		return ProductionBatch{}, fmt.Errorf("读取生产批失败: %w", err)
+	}
+	if status == BatchStatusVoid {
+		return ProductionBatch{}, fmt.Errorf("%w：生产批 #%d", ErrAlreadyVoid, id)
+	}
+	if status == BatchStatusDone {
+		return ProductionBatch{}, fmt.Errorf("%w：生产批 #%d 已完成，不能作废", ErrProdState, id)
+	}
+	// ★ 判定口径： b_feed_record 中存在该批记录 ⇒ 已投料（含已删除投料之外的全部现存记录）。
+	var feeds int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM b_feed_record WHERE batch_id = ?`, id).Scan(&feeds); err != nil {
+		return ProductionBatch{}, fmt.Errorf("统计投料记录失败: %w", err)
+	}
+	if feeds > 0 {
+		return ProductionBatch{}, fmt.Errorf("%w：生产批 #%d 已有 %d 条投料记录", ErrBatchFed, id, feeds)
+	}
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE b_production_batch SET status = ? WHERE id = ?`, BatchStatusVoid, id); err != nil {
+		return ProductionBatch{}, fmt.Errorf("作废生产批失败: %w", err)
+	}
+	if err := appendAuditTx(ctx, tx, audit.Entry{
+		Entity: "b_production_batch", EntityID: id, Action: "void",
+		Field: "status", OldValue: status, NewValue: BatchStatusVoid,
+		Reason:      strings.TrimSpace(reason),
+		ActorOpenID: actor.OpenID, ActorName: actor.Name, ActorRole: actor.Role, IP: actor.IP,
+	}); err != nil {
+		return ProductionBatch{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ProductionBatch{}, fmt.Errorf("提交失败: %w", err)
+	}
+	return s.GetProductionBatch(ctx, id)
 }
 
 // ListProductionBatches 列生产批（status 可空 ⇒ 全部；读入口 prod.batch.create/READ）。

@@ -3,6 +3,7 @@ package access
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -130,6 +131,10 @@ type Identity struct {
 	Name   string
 }
 
+// ErrAuthCodeRejected 是「飞书明确拒绝该授权码」（无效 / 过期 / 已使用）的哨兵。
+// ★ exchange 端点据此映射 401；callback 对一切错误仍回友好 HTML 502（行为不变）。
+var ErrAuthCodeRejected = errors.New("飞书拒绝了授权码")
+
 // Exchange 用授权 code 换 open_id（回调主流程的第二步）。
 func (f *FeishuClient) Exchange(ctx context.Context, code, redirectURI string) (Identity, error) {
 	var ident Identity
@@ -157,12 +162,24 @@ func (f *FeishuClient) Exchange(ctx context.Context, code, redirectURI string) (
 		AccessToken string `json:"access_token"`
 		Code        int    `json:"code"`
 		Msg         string `json:"msg"`
+		// ★ v2 端点的 OAuth2 风格错误体（实测 2026-10-20：无效 code 回
+		//   {"error":"invalid_grant","error_description":"…","code":20003}）。
+		Error       string `json:"error"`
+		Description string `json:"error_description"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tok); err != nil {
 		return ident, fmt.Errorf("飞书换 token 响应解析失败: %w", err)
 	}
 	if tok.AccessToken == "" {
-		return ident, fmt.Errorf("飞书换 token 被拒（code=%d msg=%s）", tok.Code, tok.Msg)
+		detail := tok.Msg
+		if detail == "" {
+			detail = tok.Description
+		}
+		// ★ 无效/过期/已用的授权码 ⇒ 哨兵 ErrAuthCodeRejected（exchange 端点映射 401）；
+		//   callback 仍按「一切错误 ⇒ 友好页 502」处理（行为不变）。
+		//   消息保留原文「换 token 被拒」（既有测试与日志习惯依赖该措辞）。
+		return ident, fmt.Errorf("飞书换 token 被拒（code=%d msg=%s error=%s）: %w",
+			tok.Code, detail, tok.Error, ErrAuthCodeRejected)
 	}
 
 	ureq, err := http.NewRequestWithContext(ctx, http.MethodGet, f.userInfoEndpoint(), nil)

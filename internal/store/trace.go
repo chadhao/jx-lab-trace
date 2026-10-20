@@ -182,7 +182,7 @@ func normalizeTraceBagCode(raw string) (codec.Parsed, error) {
 	return p, nil
 }
 
-// normalizeTraceFgCode 解析反向查询的成品批码（T='D'）。
+// normalizeTraceFgCode 解析反向查询的成品码（T='D' 成品批 或 'E' 成品袋，N-027 B-req-3）。
 func normalizeTraceFgCode(raw string) (codec.Parsed, error) {
 	s := strings.TrimSpace(raw)
 	if s == "" {
@@ -200,8 +200,8 @@ func normalizeTraceFgCode(raw string) (codec.Parsed, error) {
 	if err != nil {
 		return codec.Parsed{}, err
 	}
-	if p.Seg.T != "D" {
-		return codec.Parsed{}, fmt.Errorf("%w：反向追溯扫成品批码（D），实际 %s", ErrProdBadInput, p.Seg.T)
+	if p.Seg.T != "D" && p.Seg.T != "E" {
+		return codec.Parsed{}, fmt.Errorf("%w：此入口请扫成品批码（D）或成品袋码（E），实际 %s", ErrProdBadInput, p.Seg.T)
 	}
 	return p, nil
 }
@@ -430,14 +430,30 @@ func (s *Store) TraceBackward(ctx context.Context, fgLotID int64, fgCode string)
 		if err != nil {
 			return out, err
 		}
-		err = s.db.QueryRowContext(ctx,
-			`SELECT id, code, status FROM b_fg_lot WHERE code = ?`, p.Full).
-			Scan(&lot.ID, &lot.Code, &lot.Status)
-		if errors.Is(err, sql.ErrNoRows) {
-			return out, fmt.Errorf("%w：成品批 %s", ErrProdNotFound, p.Full)
-		}
-		if err != nil {
-			return out, fmt.Errorf("读取成品批失败: %w", err)
+		// ★ N-027 B-req-3：E 成品袋码入口 —— 袋 → 所属成品批，再走既有反向链（E→D→C→…）。
+		if p.Seg.T == "E" {
+			err = s.db.QueryRowContext(ctx, `
+SELECT l.id, l.code, l.status
+  FROM b_fg_bag fb
+  JOIN b_fg_lot l ON l.id = fb.fg_lot_id
+ WHERE fb.code = ?`, p.Full).
+				Scan(&lot.ID, &lot.Code, &lot.Status)
+			if errors.Is(err, sql.ErrNoRows) {
+				return out, fmt.Errorf("%w：成品袋 %s", ErrProdNotFound, p.Full)
+			}
+			if err != nil {
+				return out, fmt.Errorf("读取成品袋失败: %w", err)
+			}
+		} else {
+			err = s.db.QueryRowContext(ctx,
+				`SELECT id, code, status FROM b_fg_lot WHERE code = ?`, p.Full).
+				Scan(&lot.ID, &lot.Code, &lot.Status)
+			if errors.Is(err, sql.ErrNoRows) {
+				return out, fmt.Errorf("%w：成品批 %s", ErrProdNotFound, p.Full)
+			}
+			if err != nil {
+				return out, fmt.Errorf("读取成品批失败: %w", err)
+			}
 		}
 	} else if fgLotID > 0 {
 		err := s.db.QueryRowContext(ctx,

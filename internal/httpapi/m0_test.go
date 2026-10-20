@@ -92,6 +92,7 @@ type env struct {
 	t   *testing.T
 	cfg *config.Config
 	st  *store.Store
+	api *Server // ★ N-027：测试内覆写 Feishu 等字段用（restart 后指向新实例）
 	srv *httptest.Server
 	ttl time.Duration
 }
@@ -124,7 +125,8 @@ func (e *env) serve() {
 	if e.srv != nil {
 		e.srv.Close()
 	}
-	handler := New(e.cfg, e.st, "test").Handler()
+	e.api = New(e.cfg, e.st, "test")
+	handler := e.api.Handler()
 	e.srv = httptest.NewServer(handler)
 }
 

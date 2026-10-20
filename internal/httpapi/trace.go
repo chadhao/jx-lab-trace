@@ -79,16 +79,58 @@ func (s *Server) handleTraceBackward(c echo.Context) error {
 
 // ---- D6 批次档案 ----
 
+// handleTraceBatchArchive 批次档案入口（N-027 B-req-3 扩展准入）：
+//
+//	数字 id        ⇒ 直用（既有行为不变）
+//	C 生产批码     ⇒ 按 code 查 b_production_batch 得 id
+//	其它类型码     ⇒ 400「此入口请扫生产批码（C）」
 func (s *Server) handleTraceBatchArchive(c echo.Context) error {
-	batchID, err := strconv.ParseInt(c.Param("batchId"), 10, 64)
-	if err != nil || batchID <= 0 {
-		return echo.NewHTTPError(http.StatusBadRequest, "batchId 须为正整数")
+	raw := strings.TrimSpace(c.Param("batchId"))
+	batchID, err := s.resolveTraceBatchID(c, raw)
+	if err != nil {
+		return err
 	}
 	row, err := s.Store.GetBatchArchive(c.Request().Context(), batchID)
 	if err != nil {
 		return traceErr(err)
 	}
 	return c.JSON(http.StatusOK, row)
+}
+
+// resolveTraceBatchID 把入口参数解析成生产批 id（数字直用 / C 码查库 / 其它 400）。
+func (s *Server) resolveTraceBatchID(c echo.Context, raw string) (int64, error) {
+	if raw == "" {
+		return 0, echo.NewHTTPError(http.StatusBadRequest, "batchId 不能为空（数字 id 或 C 生产批码）")
+	}
+	// ① 纯数字 ⇒ id 直用（既有行为）
+	if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		if id <= 0 {
+			return 0, echo.NewHTTPError(http.StatusBadRequest, "batchId 须为正整数")
+		}
+		return id, nil
+	}
+	// ② 追踪码 ⇒ codec 解析后按类型分流
+	code := strings.ToUpper(raw)
+	if strings.Contains(raw, "-") {
+		f, err := codec.FromHuman(raw)
+		if err != nil {
+			return 0, traceErr(err)
+		}
+		code = f
+	}
+	p, err := codec.Parse(code)
+	if err != nil {
+		return 0, traceErr(err)
+	}
+	if p.Seg.T != "C" {
+		return 0, echo.NewHTTPError(http.StatusBadRequest,
+			"此入口请扫生产批码（C）或直接传生产批数字 id，实际是 "+p.Seg.T+" 类码")
+	}
+	id, err := s.Store.ProductionBatchIDByCode(c.Request().Context(), p.Full)
+	if err != nil {
+		return 0, traceErr(err)
+	}
+	return id, nil
 }
 
 // ---- 错误映射 ----

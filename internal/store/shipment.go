@@ -69,23 +69,28 @@ type Shipment struct {
 	Operator     string     `json:"operator"`
 	Status       string     `json:"status"`
 	Remark       string     `json:"remark"`
-	CreatedAt    *time.Time `json:"created_at"`
-	CreatedBy    string     `json:"created_by"`
+	// ★ N-027 B-req-1：单头净重聚合 = Σ 明细袋 b_fg_bag.weight_allocated，
+	//	作废袋不计（口径：status <> '作废'）。仅详情路径填充；列表保持轻量不带。
+	NetWeightTotal *float64   `json:"net_weight_total"`
+	CreatedAt      *time.Time `json:"created_at"`
+	CreatedBy      string     `json:"created_by"`
 }
 
 // ShipmentItem 是出货明细（逐袋扫码归集的行）。
 type ShipmentItem struct {
-	ID         int64      `json:"id"`
-	ShipmentID int64      `json:"shipment_id"`
-	FgBagID    int64      `json:"fg_bag_id"`
-	BagCode    string     `json:"bag_code"`
-	BagHuman   string     `json:"bag_human"`
-	BagStatus  string     `json:"bag_status"`
-	FgLotID    int64      `json:"fg_lot_id"`
-	FgLotCode  string     `json:"fg_lot_code"`
-	CustomerID int64      `json:"customer_id"`
-	CreatedAt  *time.Time `json:"created_at"`
-	CreatedBy  string     `json:"created_by"`
+	ID         int64  `json:"id"`
+	ShipmentID int64  `json:"shipment_id"`
+	FgBagID    int64  `json:"fg_bag_id"`
+	BagCode    string `json:"bag_code"`
+	BagHuman   string `json:"bag_human"`
+	BagStatus  string `json:"bag_status"`
+	// ★ N-027 B-req-1：明细行暴露该袋的摊算重（b_fg_bag.weight_allocated）。
+	WeightAllocated *float64   `json:"weight_allocated"`
+	FgLotID         int64      `json:"fg_lot_id"`
+	FgLotCode       string     `json:"fg_lot_code"`
+	CustomerID      int64      `json:"customer_id"`
+	CreatedAt       *time.Time `json:"created_at"`
+	CreatedBy       string     `json:"created_by"`
 }
 
 // ShipVoidRecord 是撤销的发起 / 审批留痕（读自 s_audit_log）。
@@ -101,10 +106,18 @@ type ShipVoidRecord struct {
 // ===== 入参 =====
 
 // CreateShipmentInput 是建单 + 批量归集的入参（bag_codes 至少 1 个）。
+//
+// ★ N-027 B-req-2：vehicle_id / plate_no / driver 可选 —— 建单即可携带车辆，
+//
+//	落库到 b_shipment 单头（列本就存在，原先只在出场登记时写）。
+//	出场登记（DepartInput）仍可覆盖；APP 端把出场的 plate_no/driver 做成预填只读。
 type CreateShipmentInput struct {
 	CustomerID int64    `json:"customer_id"` // 缺省 0 ⇒ 由首个袋推定
 	BagCodes   []string `json:"bag_codes"`
 	Remark     string   `json:"remark"`
+	VehicleID  *int64   `json:"vehicle_id"`
+	PlateNo    string   `json:"plate_no"`
+	Driver     string   `json:"driver"`
 }
 
 // AddShipmentItemInput 是向已有单追加扫码的入参。
@@ -158,7 +171,7 @@ func scanShipment(sc interface{ Scan(...interface{}) error }) (Shipment, error) 
 }
 
 const shipmentItemSelect = `
-SELECT i.id, i.shipment_id, i.fg_bag_id, b.code, b.status,
+SELECT i.id, i.shipment_id, i.fg_bag_id, b.code, b.status, b.weight_allocated,
        b.fg_lot_id, l.code, l.customer_id, i.created_at, i.created_by
   FROM b_shipment_item i
   JOIN b_fg_bag b ON b.id = i.fg_bag_id
@@ -166,13 +179,18 @@ SELECT i.id, i.shipment_id, i.fg_bag_id, b.code, b.status,
 
 func scanShipmentItem(sc interface{ Scan(...interface{}) error }) (ShipmentItem, error) {
 	var it ShipmentItem
+	var weight sql.NullFloat64
 	var created sql.NullTime
 	err := sc.Scan(&it.ID, &it.ShipmentID, &it.FgBagID, &it.BagCode, &it.BagStatus,
-		&it.FgLotID, &it.FgLotCode, &it.CustomerID, &created, &it.CreatedBy)
+		&weight, &it.FgLotID, &it.FgLotCode, &it.CustomerID, &created, &it.CreatedBy)
 	if err != nil {
 		return ShipmentItem{}, err
 	}
 	it.BagHuman, _ = codec.ToHuman(it.BagCode)
+	if weight.Valid {
+		w := weight.Float64
+		it.WeightAllocated = &w
+	}
 	if created.Valid {
 		t := created.Time
 		it.CreatedAt = &t
@@ -306,6 +324,39 @@ SELECT s.shipment_no
 	return bagID, fgLotID, custID, nil
 }
 
+// truckContextForFgBagTx 从成品袋码回溯其谱系车次的车辆上下文（N-027 B-req-2 预填）。
+//
+//	链：E 成品袋 → D 成品批 → C 生产批 → b_feed_record → B 吨袋 → A 车次 → m_vehicle。
+//	取**首条**投料所属车次（多车混装时 APP 端可改）；链上无车次/车辆 ⇒ ok=false（不预填）。
+func truckContextForFgBagTx(ctx context.Context, tx *sql.Tx, raw string) (*int64, string, string, bool) {
+	p, err := normalizeFgBagCode(raw)
+	if err != nil {
+		return nil, "", "", false
+	}
+	var vehicleID sql.NullInt64
+	var plateNo, driver sql.NullString
+	err = tx.QueryRowContext(ctx, `
+SELECT t.vehicle_id, COALESCE(v.plate_no, ''), COALESCE(t.driver, '')
+  FROM b_fg_bag fb
+  JOIN b_fg_lot l ON l.id = fb.fg_lot_id
+  JOIN b_feed_record f ON f.batch_id = l.batch_id
+  JOIN b_bag b ON b.id = f.bag_id
+  JOIN b_truck_lot t ON t.id = b.truck_lot_id
+  LEFT JOIN m_vehicle v ON v.id = t.vehicle_id
+ WHERE fb.code = ?
+ LIMIT 1`, p.Full).Scan(&vehicleID, &plateNo, &driver)
+	if err != nil {
+		// 查无链路（未投料 / 车次缺车辆）⇒ 不预填，不报错（预填是增强不是主流程）。
+		return nil, "", "", false
+	}
+	var vid *int64
+	if vehicleID.Valid {
+		v := vehicleID.Int64
+		vid = &v
+	}
+	return vid, plateNo.String, driver.String, true
+}
+
 // ===== D1 · 建单 + 逐袋归集（同一事务）=====
 
 // CreateShipment 建出货单并归集 bag_codes（至少 1 个）。
@@ -384,10 +435,23 @@ func (s *Store) CreateShipment(ctx context.Context, in CreateShipmentInput, acto
 		return Shipment{}, fmt.Errorf("%w：无法推定客户", ErrShipBadInput)
 	}
 
+	// ★ N-027 B-req-2：车辆字段三者全空 ⇒ 从首个袋的谱系车次预填（APP 端仍可改）。
+	//	链：E 成品袋 → D 成品批 → C 生产批 → b_feed_record → B 吨袋 → A 车次 → 车辆档案。
+	//	代价 = 一条 JOIN 查询（与谱系查询同型）；任一字段已给定则整组不预填（尊重显式入参）。
+	vehicleID := in.VehicleID
+	plateNo := strings.TrimSpace(in.PlateNo)
+	driver := strings.TrimSpace(in.Driver)
+	if vehicleID == nil && plateNo == "" && driver == "" {
+		if vID, p, d, ok := truckContextForFgBagTx(ctx, tx, codes[0]); ok {
+			vehicleID, plateNo, driver = vID, p, d
+		}
+	}
+
 	res, err := tx.ExecContext(ctx, `
-INSERT INTO b_shipment (shipment_no, customer_id, status, remark, created_by)
-VALUES (?,?,?,?,?)`,
-		shipNo, customerID, ShipStatusOut, nullStr(in.Remark), actor.OpenID)
+INSERT INTO b_shipment (shipment_no, customer_id, vehicle_id, plate_no, driver, status, remark, created_by)
+VALUES (?,?,?,?,?,?,?,?)`,
+		shipNo, customerID, nullIntPtr(vehicleID), nullStr(plateNo), nullStr(driver),
+		ShipStatusOut, nullStr(in.Remark), actor.OpenID)
 	if err != nil {
 		if isDuplicateErr(err) {
 			return Shipment{}, fmt.Errorf("%w：出货单号 %s 已存在", ErrShipSeqBusy, shipNo)
@@ -691,6 +755,10 @@ UPDATE b_fg_bag SET status = ?
 // ===== 读 =====
 
 // GetShipment 读单张出货单。
+//
+// ★ N-027 B-req-1：同时算单头 net_weight_total —— Σ 明细袋 b_fg_bag.weight_allocated，
+//
+//	**作废袋不计**（b_fg_bag.status <> '作废'）。无明细或摊算重全空 ⇒ 0。
 func (s *Store) GetShipment(ctx context.Context, id int64) (Shipment, error) {
 	sh, err := scanShipment(s.db.QueryRowContext(ctx, shipmentSelect+` WHERE s.id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -698,6 +766,21 @@ func (s *Store) GetShipment(ctx context.Context, id int64) (Shipment, error) {
 	}
 	if err != nil {
 		return Shipment{}, fmt.Errorf("读取出货单失败: %w", err)
+	}
+	var total sql.NullFloat64
+	if err := s.db.QueryRowContext(ctx, `
+SELECT SUM(b.weight_allocated)
+  FROM b_shipment_item i
+  JOIN b_fg_bag b ON b.id = i.fg_bag_id
+ WHERE i.shipment_id = ? AND b.status <> ?`, id, BagStatusVoid).Scan(&total); err != nil {
+		return Shipment{}, fmt.Errorf("汇总出货净重失败: %w", err)
+	}
+	if total.Valid {
+		v := total.Float64
+		sh.NetWeightTotal = &v
+	} else {
+		zero := 0.0
+		sh.NetWeightTotal = &zero
 	}
 	return sh, nil
 }

@@ -61,6 +61,9 @@ func (s *Server) Handler() *echo.Echo {
 	}
 	auth.GET("/feishu/start", s.handleFeishuStart)
 	auth.GET("/feishu/callback", s.handleFeishuCallback)
+	// ★ N-027 D1：Applink 授权码直换会话（APP 侧 CookieJar 持会话）。
+	//   登录端点免权限（同 callback）；★ 不新增权限点。
+	auth.POST("/feishu/exchange", s.handleFeishuExchange)
 	auth.POST("/logout", s.handleLogout, access.RequireLogin())
 
 	// —— 需要登录、但不额外要权限点 ——

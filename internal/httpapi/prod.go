@@ -44,6 +44,11 @@ func (s *Server) mountProd(e *echo.Echo) {
 		access.RequirePerm(s.Store, permission.ProdBatchCreate, access.LevelAll))
 	g.GET("/batches/:id", s.handleGetBatch,
 		access.RequirePerm(s.Store, permission.ProdBatchCreate, access.LevelRead))
+	// ★ N-027 B-req-4：生产批作废（仅建批后未投料可作废）。
+	//   权限挂 prod.batch.create/ALL —— 作废是批生命周期的写操作，与建批同域；
+	//   ★ 不新增权限点（51 点冻结）。
+	g.PATCH("/batches/:id/void", s.handleVoidBatch,
+		access.RequirePerm(s.Store, permission.ProdBatchCreate, access.LevelAll))
 
 	// —— D2 投料扫码（谱系承重墙）+ 更正 / 删除 ——
 	g.GET("/batches/:id/feeds", s.handleListFeeds,
@@ -120,6 +125,25 @@ func (s *Server) handleGetBatch(c echo.Context) error {
 		return prodErr(err)
 	}
 	return c.JSON(http.StatusOK, map[string]interface{}{"row": row})
+}
+
+// handleVoidBatch 作废生产批（N-027 B-req-4）：仅「建批后未投料」；已投料/已完成/已作废 ⇒ 409。
+func (s *Server) handleVoidBatch(c echo.Context) error {
+	id, err := pathID(c)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := decodeBody(c, &body); err != nil {
+		return err
+	}
+	row, err := s.Store.VoidProductionBatch(c.Request().Context(), id, body.Reason, mdActor(c))
+	if err != nil {
+		return prodErr(err)
+	}
+	return c.JSON(http.StatusOK, map[string]interface{}{"voided": true, "row": row})
 }
 
 // ---- D2 投料 ----
@@ -388,6 +412,7 @@ func prodErr(err error) error {
 		errors.Is(err, store.ErrAlreadyVoid),
 		errors.Is(err, store.ErrReworkSrcState),
 		errors.Is(err, store.ErrTruckFed),
+		errors.Is(err, store.ErrBatchFed),
 		errors.Is(err, store.ErrReprintReason):
 		return echo.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, store.ErrProdBadInput),
