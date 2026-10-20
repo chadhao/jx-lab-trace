@@ -2175,6 +2175,18 @@
 
 **结论：`N-027` 验收通过 → `AGREED`**。★ **APP 侧 Applink 接入依赖解除**（exchange 端点就绪）＋ B-req 四项交付。
 
+### N-028 · P0：exchange 移动端（SDK）token 契约分支 ＋ 拒绝路径日志（合并 REQ-04/05）
+
+- **提出方**：APP 设计侧（`BACKEND-REQ-05.md` 合并 `REQ-04`，P0——SDK 登录链路阻塞），经 WorkBuddy 转达
+- **类型**：技术方案
+- **责任域**：mimo
+- **背景**：真机 LarkSSO 链路跑通但 exchange 返回 AUTH_NO_ROLE；数据库绑定（ou_b490a…=sysadmin）、飞书通讯录（郝端）、APP 映射均已排查排除。★ **根因（官方文档证据）**：exchange 用网页 OAuth v2 端点（带 redirect_uri）处理了移动端 SDK 的 code；官方 app-login 文档明确**移动端登录 ⇒ `passport.feishu.cn/suite/passport/oauth/token`、不传 redirect_uri** ⇒ 换出 open_id 语义错位。
+- **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-12.md`**：**D1** `handleFeishuExchange` 加 `source:"sdk"` 分支（passport 端点＋无 redirect_uri；source 空＝现行为——**callback 兼容红线**；code_verifier P1）＋ **D2** `ErrLoginDenied` 拒绝路径 Warn 日志（含实际换到的 open_id/name——APP 侧排查实锤手段）＋ **D3** 兼容红线回归（callback/dev/三错误分支/首登 bootstrap 照常）＋ **D4** 分层测试（**无法构造真实 SDK code**：单测断言请求构造端点/参数/无 redirect_uri＋passport 响应形状解析；真机端到端由 APP 重试，如实声明为未做项）＋ **D5** 交付。
+- **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
+- **制度影响面**：仅 feishu.go＋handlers.go 的 exchange 路径；callback/dev 行为一字不改。
+- **状态**：OPEN
+- **最后更新**：2026-10-21 02:40
+
 ## 5. 已决议
 
 **`N-001` · 批 1（M0 地基）实现 —— `AGREED`（2026-10-09 02:38）**
