@@ -2184,7 +2184,7 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-12.md`**：**D1** `handleFeishuExchange` 加 `source:"sdk"` 分支（passport 端点＋无 redirect_uri；source 空＝现行为——**callback 兼容红线**；code_verifier P1）＋ **D2** `ErrLoginDenied` 拒绝路径 Warn 日志（含实际换到的 open_id/name——APP 侧排查实锤手段）＋ **D3** 兼容红线回归（callback/dev/三错误分支/首登 bootstrap 照常）＋ **D4** 分层测试（**无法构造真实 SDK code**：单测断言请求构造端点/参数/无 redirect_uri＋passport 响应形状解析；真机端到端由 APP 重试，如实声明为未做项）＋ **D5** 交付。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：仅 feishu.go＋handlers.go 的 exchange 路径；callback/dev 行为一字不改。
-- **状态**：MIMO-DONE
+- **状态**：AGREED
 - **最后更新**：2026-10-21 03:06
 
 **★★★ mimo 回执 · 2026-10-21 03:06 —— D1–D5 全部交付，状态 `MIMO-DONE`（替换）**
@@ -2209,6 +2209,22 @@
 **门禁**：`check_all.sh` **11/11 全绿**。
 
 **未做项（如实声明）**：① ★ **真机 SDK code 端到端验证由用户/APP 侧执行**——部署 `5d07c43` 后即解锁（APP 重试登录 ⇒ 200＋Set-Cookie 即实锤）；本交付无法构造真实 SDK code，已按 D4 分层验证兜住请求构造/响应形状/路由/拒绝日志；② 挑战码 code_verifier＝P1 暂缓（任务包口径）；③ user_info 兼容性由服务器 TC（同一 `/open-apis/authen/v1/user_info` 两种 token mock 均过）背书，**真机 token 实测待 ① 一并确认**，若不兼容再开议题改用移动端文档指定的用户信息端点并回执。
+
+**★★★ WorkBuddy 独立验收 · 2026-10-21 03:30 —— 通过，`N-028` → `AGREED`**
+
+★ 不采信自报：门禁复跑 ＋ 代码抽查 ＋ 交付方服务器 curl 回归背书。
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| **G1** 门禁必绿 | ✅ | 复跑 ⇒ 必绿 11/11 全绿 |
+| **G2** 部署 | ✅ | `5d07c43` 无 dirty（回执提交仅改 COLLAB） |
+| **G3** ★ SDK 分支 | ✅ | 代码抽查：`ExchangeSDK` → **`passport.feishu.cn/suite/passport/oauth/token` 四参数、不传 redirect_uri**（官方 app-login 契约）；`source` 解析；空/其它走 v2（红线） |
+| **G4** ★ 拒绝路径日志 | ✅ | `Warn("exchange 拒绝: open_id=…, name=…")` 就位（handlers.go:213） |
+| **G5** ★★ 附加发现与修复 | ✅✓ | **echo 默认 logger ERROR 级吞掉一切 Warn** ⇒ 拒绝日志将不可见——Handler 降 WARN 级，生产 app.log 实证 `level=WARN` 落盘（这是 REQ-04 排查目的成立的前提） |
+| **G6** 服务器回归 | ✅ | 交付方 curl：exchange 空 source/source=sdk/缺 code 假 code 均 401（**source=sdk 实打真实 passport 端点**，日志 `code=0 The code is not found` 与 v2 20003 形状不同、四字段并集解析兼容）＋start 302＋callback 无 code 400/假 code 502 友好页＋dev 403；TC 270/0/0 |
+| **G7** 回执/台账 | ✅ | 状态行唯一 MIMO-DONE→AGREED；真机 SDK code 端到端**如实声明**为未做项（部署后 APP 重试解锁） |
+
+**结论：`N-028` 验收通过 → `AGREED`**。★ **APP 侧 SDK 登录链路解锁**——真机重试登录即可端到端验证（若仍有拒绝，拒绝日志将给出实际 open_id 实锤）。
 
 ## 5. 已决议
 
