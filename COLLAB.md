@@ -2235,8 +2235,41 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-13.md`**。★★ **架构红线：app 端点是薄层**——每 handler 委托与 Web 端**同一 store 方法**（单一真相），禁止复制业务逻辑；**不新增权限点**（18 现场点已齐）；**不改 Web 端行为**。★ 交付物含 **`docs/APP-API-A-B.md` 字段级契约文档**（APP 接入依赖）。★ 批次 C/D 本批不做（如实声明后续批次）。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：新增 `/api/app/*` 薄层路由与只读聚合查询；不改 `spec/` 冻结口径。
-- **状态**：OPEN
-- **最后更新**：2026-10-21 17:25
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-21 18:28
+
+#### ✅ mimo 回执 · 2026-10-21 18:28（N-029 / MIMO-NEXT-FIX-13）—— MIMO-DONE
+
+- **范围**：批次 A（`GET /api/app/home`）＋ 批次 B（收货域六端点）全部落地；★ **批次 C/D（生产/出货/追溯/报表）本批不做**，如实声明为后续批次（任务包 D0/D5）。
+- **交付物**：① `internal/httpapi/app.go`（7 端点薄层 + 结构化拦截中间件）、`internal/store/app_read.go`（★只读聚合/只读查询）、`internal/httpapi/server.go`（挂载）、`internal/store/audit.go`（`ListAudit` 抽共享查询 + 新增 `ListAuditByActor`，Web 行为零改动）；② `docs/APP-API-A-B.md`＝批次 A+B **字段级契约**（请求/响应逐字段＋示例＋错误码＋拦截页字段说明＋owner/contact 映射）——**APP 接入以该文档为准**；③ `internal/httpapi/app_test.go`：TC-N029-01~08。
+- **★ 薄层架构自查**：7 个 handler 只做「鉴权＋入参校验＋调 store＋形状包装」；写路径全部委托与 Web **同一 store 方法**（`ListNotices` / `ConfirmArrival` / `ReturnTruck` / `WeighTruck` / `GenerateBags` / `PrintLabels`），**未复制任何业务逻辑**；新增代码仅限只读聚合/只读查询与 APP 形状包装。
+- **权限点**：**0 新增**。六动作与 Web 同点同级（`recv.notice.create` READ · `recv.arrive.confirm` ALL · `recv.return` ALL · `recv.weigh` ALL · `recv.bag.gen` ALL · `recv.label.reprint` ALL）。home 是跨域只读聚合 ⇒ 挂 `RequireLogin`（登录必达），**按域判 READ 可见性**（7 个进行中项＋3 个待办各有权限门，见契约文档 §3.3/§3.4）——它没有单一对应的现场权限点，故不挂 `RequirePerm`，在此如实说明。
+- **结构化拦截 owner/contact 映射表（D0）**：
+
+  | 拦截类 | HTTP | error | owner | contact |
+  |---|---|---|---|---|
+  | 未登录 | 401 | 未登录 | 本人 / 系统管理员（登录会话） | 在飞书内重新打开本应用登录；仍失败联系系统管理员 |
+  | 无权限 | 403 | 无权限 | 系统管理员（权限配置） | 飞书联系系统管理员，请其在 Web「后台 › 权限矩阵」按角色调整 |
+  | 无预报 | 404 | 无预报 | 收货文员（预报登记） | 飞书联系收货文员在 Web「收货 › 预报登记」补录预报后再操作 |
+  | 无车辆档案 | 404 | 无车辆档案 | 主数据维护（车辆档案） | 飞书联系主数据维护在 Web「主数据 › 车辆档案」补建档案 |
+  | 收货域业务拒绝 | 400/404/409 | store 原文 | 收货文员（收货与打码） | 飞书联系收货文员按页面提示处理 |
+
+  实现：`/api/app` **组级中间件**把守卫抛出的 401/403 改写成四字段（`error/reason/owner/contact`）；**Web 路由不挂该中间件 ⇒ Web 错误结构零改动**（TC-N029-01 钉住 `{error,point,need,hint}` 原样保留）。
+- **★ 皮重历史机制口径（如实声明）**：系统**原无**历史皮重查询；本批新增 `store.LastTareFor`（**只读查询**：同 `vehicle_id` → 同车牌，取最近一次有皮重的车次，排除自身）。APP 过磅省略 `tare_weight` 时取历史并以 `tare_source=history` 明示出处；**无历史 ⇒ 400 要求人工录入，不猜值**；净重仍由 `WeighTruck` 计算（毛 − 皮，实测口径不变）。
+- **最近作业数据源**：`s_audit_log`，`actor_open_id = 登录人`，按 `id` 倒序取 10 条（TC 钉住「只含本人记录」）。
+- **门禁**：`bash scripts/check_all.sh` **11/11 全绿**（会报 2 项均无命中）。
+- **服务器 TC**：`bash scripts/run_tc_server.sh` **278/0/0 全绿**（access 11 / audit 3 / codec 6 / config 8 / httpapi 151 / permission 4 / specload 2 / store 93；N-029 新增 8 项：权限矩阵、形状逐字段、Web↔APP 等价性（到货/过磅/打码/补打/退车库内结果一致）、home 各角色可见域与计数、三类拦截、皮重历史口径）。
+- **部署**：`bash scripts/deploy-test-server.sh --restart --smoke` ⇒ `/healthz` = `{"dev":true,"status":"ok","version":"dba4d9d"}` ＝ 提交 **`dba4d9d`**（＝部署时 HEAD，**无 `-dirty` 后缀**）；`.env.deploy` md5 前后一致 `ABE7A05DB108485E8DCCFA3A90558A9D`；主服务 PID 587643 / reportd PID 587655。
+- **curl 实测（测试服务器，PASS=27 FAIL=0）**：
+  - home 各角色：receiver → `['insp','recv','ship']`（无 prod）；qc/sales → `['insp','prod','recv','ship']`；production → 仅 `['insp','prod']` 且 todos 空；匿名 → **401 四字段**；
+  - 权限矩阵：notices receiver 200 / production 403；arrive-confirm·bag-gen·return（qc）403；weigh·label-reprint（sales）403；匿名 401 —— 全部四字段结构；
+  - 正例链：预报 → APP 到货（27 位车码 `1ACG9304930426102101000000C`、`arrive_date=2026-10-21`）→ APP 过磅（9−3=6）→ APP 打码 3 袋（袋序 1..3 后端分配、摊算 2.000/袋）→ APP 补打（`is_reprint=1` 且原因留痕）；
+  - 反例：无预报 404 / 无车辆档案 404 / 无权限 403 / 未登录 401 / 缺皮重且无历史 400 / 补打缺原因 400 / 重复打码 409 / 无质检退货判定 409 —— 均四字段；
+  - **Web 零改动实证**：同一条「`vehicle_id` 悬空」的预报，APP 侧被「无车辆档案」404 拦截，Web 侧 `POST /api/recv/arrivals` 照常 **200**（同一预报两条，互不干扰）。
+- **联调身份收尾**：curl 用 `ou_curl_n029_recv/qc/prod/sales` 四个单角色账号（sysadmin 经 `/api/admin/user-roles` 绑定），测完**已全部解绑**，`s_user_role` 无残留。
+- **如实声明未做**：① 批次 C/D 端点（后续批次，本批零交付）；② APP 端无「无预报直达到货」（该能力仅 Web 存在，APP 只接受 `notice_id`）；③ 历史皮重自动取值是本批新增只读查询（原无机制），无历史时必须人工录入；④ 车辆档案校验只在 APP 到货确认做只读前置拦截，**Web 端行为不变**。
+- **权限矩阵口径提醒**：矩阵是后台可配的（本库实测 sysadmin 已有收货域授权，与 spec 种子不同）⇒ TC 不钉死角色格子值，改钉「端点 ↔ 权限点 ↔ 级别 ↔ 可见性」映射本身；契约文档 §6 表按**种子**推导并注明「实际以库内 `s_role_permission` 实况为准」。
+- **提交**：`dba4d9d`（代码＋契约＋TC）＋ 本回执提交；显式路径、**只本地提交不 push**。
 
 ## 5. 已决议
 
