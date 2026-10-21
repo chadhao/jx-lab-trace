@@ -87,6 +87,17 @@ type AuditRow struct {
 
 // ListAudit 最近 limit 条审计（受 sys.audit.view 保护的入口用）。
 func (s *Store) ListAudit(ctx context.Context, limit int) ([]AuditRow, error) {
+	return s.listAudit(ctx, "", nil, limit)
+}
+
+// ListAuditByActor 最近 limit 条**本人（actor_open_id）**审计
+// （N-029：APP 首页「最近作业」数据源；只读，与 ListAudit 同一查询，仅多一个 WHERE）。
+func (s *Store) ListAuditByActor(ctx context.Context, openID string, limit int) ([]AuditRow, error) {
+	return s.listAudit(ctx, "WHERE actor_open_id = ?", []interface{}{openID}, limit)
+}
+
+// listAudit 共享查询：where 为空 = 全量（Web 侧既有语义不变）。
+func (s *Store) listAudit(ctx context.Context, where string, args []interface{}, limit int) ([]AuditRow, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -95,7 +106,8 @@ func (s *Store) ListAudit(ctx context.Context, limit int) ([]AuditRow, error) {
 		       IFNULL(old_value, ''), IFNULL(new_value, ''),
 		       IFNULL(actor_open_id, ''), IFNULL(actor_name, ''), IFNULL(actor_role, ''),
 		       IFNULL(ip, ''), IFNULL(reason, ''), at
-		  FROM s_audit_log ORDER BY id DESC LIMIT ?`, limit)
+		  FROM s_audit_log `+where+` ORDER BY id DESC LIMIT ?`,
+		append(args, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("查询审计日志失败: %w", err)
 	}

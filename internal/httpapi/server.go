@@ -147,6 +147,9 @@ func (s *Server) Handler() *echo.Echo {
 	// —— 批 8 · M10 报表（★ rpt.view / rpt.export 在此消费） ——
 	s.mountRpt(e)
 
+	// —— N-029 · APP 业务 API 批次 A+B（/api/app/* 薄层：首页聚合 + 收货域六动作）——
+	s.mountApp(e)
+
 	// —— 前端（go:embed 内嵌的构建产物） ——
 	e.GET("/*", s.handleSPA)
 	return e
