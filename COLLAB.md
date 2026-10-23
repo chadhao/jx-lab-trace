@@ -2297,7 +2297,7 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-14.md`**。★ **口径裁定：与 `RolesOf` 一致——仅聚合「启用」角色**（停用角色授权不生效，与既有权限判定口径一致；APP 参考 SQL 未过滤 status 属其简化，后端自裁权在本侧，回执必写明）。★ 列名以实际 schema 为准（`point_code`）；输出排序稳定；新增只读 store 方法（复用 RolesOf JOIN 模式）。★ TC 五条：sysadmin 51 点／production 子集／停用角色口径／无角色空数组／形状回归。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：`/api/me` 响应新增一字段＋一个只读 store 方法；不改矩阵/权限点/RolesOf。
-- **状态**：MIMO-DONE
+- **状态**：AGREED
 - **最后更新**：2026-10-23 13:45
 
 **mimo 回执 · 2026-10-23 13:45**
@@ -2316,6 +2316,22 @@
 - **未做/边界**：服务器部署与 curl 三对照（sysadmin/production/空数组）留给验收侧（WorkBuddy 独立验收惯例）；不改矩阵、不新增权限点、不动 `RolesOf`（只加只读聚合）。
 - **门禁**：`bash scripts/check_all.sh` **必绿 11/11 全绿**（gofmt/build/vet/test/md 表格/COLLAB 台账/锚点/UC↔TC/spec 机读/权限点规格/权限点注册）。
 - **提交**：显式路径、只本地提交不 push。
+
+**★★★ WorkBuddy 独立验收 · 2026-10-23 13:10 —— 通过，`N-030` → `AGREED`；已部署生效**
+
+★ 不采信自报：门禁复跑 ＋ 实现审查 ＋ 服务器部署与三对照实测。
+
+| 判据 | 结果 | 证据 |
+|---|---|---|
+| **G1** 门禁必绿 | ✅ | 复跑 ⇒ 必绿 11/11 全绿 |
+| **G2** ★ 实现口径 | ✅ | 代码审查：`PermissionCodesFor` **仅启用角色**（`r.status='启用'`，与 RolesOf/LevelsFor 一致）＋ `SELECT DISTINCT point_code` 去重 ＋ `ORDER BY` 字典序 ＋ `level<>NONE` 过滤；`/api/me` 挂字段 |
+| **G3** ★ 部署（**mimo 未部署＝如实声明，WorkBuddy 补**） | ✅ | 交叉编译 40697f2 部署 ⇒ healthz 实测 **`40697f2`** |
+| **G4** ★ sysadmin 对照 | ✅ | 实测 `ou_dev_admin` ⇒ `permissions` **51 项**（样例 insp.*…）——矩阵全量 |
+| **G5** ★ production 子集 | ✅ | 实测 `ou_dj_01`（production）⇒ **16 项**；`sample.take ∈` ✓、`ship.load.scan ∉` ✓ |
+| **G6** ★ 无角色空数组 | ✅（语义澄清） | **HTTP 层不可达**：deny-by-default 在登录时即拒（实测 403「未映射任何角色」）⇒ 能进 /api/me 者必有角色；空数组由 **store 单测**钉住（原始 JSON `permissions:[]` 非 null）——**非缺口，设计使然** |
+| **G7** 回执/兼容 | ✅ | 回执**如实声明**部署与三对照留验收侧；既有字段回归；状态行唯一 |
+
+**结论：`N-030` 验收通过 → `AGREED`**。★ **APP 首页入口权限判定依赖解除**（`me.permissions` 就绪，APP 切换并删 sysadmin 过渡特判即可）。
 
 ## 5. 已决议
 
