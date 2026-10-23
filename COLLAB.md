@@ -2342,8 +2342,40 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-15.md`**：**D1** 检测链补齐（袋码取样→任务→检测单→项→结果→结论合格→处置→投料，走 Web API 完整质控链，**禁止 SQL 绕过红线**）＋ **D2** 固化为 **`scripts/seed_demo.sh`**（幂等可重复、dry-run 默认、--apply 执行——清库重置后一键演示数据的仓库资产）＋ **D3** 修正在案数据（FL1/FL2 超前建成，投料补齐后闭合）＋ **D4** 谱系抽测（E 码 backward 全链可见）。★ 不新增权限点。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：新增种子脚本（仓库资产）；不改既有端点行为。
-- **状态**：OPEN
-- **最后更新**：2026-10-23 12:50
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-23 17:10
+
+#### mimo 回执（2026-10-23）
+
+**D1 · 检测链补齐（测试服务器全链实测，非 SQL 绕过）**
+
+- 探针序 `_scratch/n031_probe*.sh` → 后固化为 `scripts/seed_demo.sh`。标准序：检测项+通用限 → 按袋 `POST /api/sample/take` → 按车 `POST /api/sample/groups` → `POST /api/insp` → `POST /:id/items` → `PATCH /:id/items/:itemId` → `POST /:id/conclusion` 合格 → `POST /api/prod/batches/:id/feeds`。
+- 实测落地：检测项 **903 水分/904 粒度D50/905 Al2O3含量**＋通用限 193/194/195；组 473/474/475；单 517/518/519 全结论合格、9 结果全 judge 合格；任务态 824/825/826 全「已检」；feed 474–478（车824×3→P1=677、车825×2→P2=678）。
+- ★ **两条任务包 vs 实现落差（如实声明）**：
+  ① 任务包 D1.2 写「结论合格 → 处置」，但业务规则 **合格禁填处置**（`SetDisposition` 实测 400「处置与结论不匹配」）⇒ 处置不在合格链上，本交付不写入处置样例；CONCESSION/不合格 单才会要处置（不在本链）。
+  ② `PATCH /:id/items/:itemId` 的 **itemId = `m_test_item.id`**（903 等），不是清单行 id；传行 id ⇒ 400「检测项不存在或未启用」。
+
+**D2 · `scripts/seed_demo.sh`（仓库资产）**
+
+- 用法：`bash scripts/seed_demo.sh [--apply] [--scale N]`；**dry-run 默认**，`--apply` 执行。主流程走 Web API（dev-login ⇒ ou_dev_admin）；SQL 仅末尾 `bin/jxdbtool` 行数报告。★★ **完整质控链，无 SQL 直插绕过红线**。
+- 幂等：主数据按 code；来料批次按 `(customer_id, material_id, customer_batch_no=DEMO-N031-*)`；取样按车次已齐份样数跳过 take（take 无已取样守卫，必须先查）；检测单按任务态「已检」；投料按袋 genealogy/feed；成品/出货按已挂判定。
+- ★ **存量吸收**：演示客户 0301/0302 名下已有 1BCG 带袋车次则吸收补链，**不重建**收货；完全无带袋车次时才按 `--scale` 新建 `DEMO-N031-*` 收货单元。
+- 服务器实测：`--apply` 在既有数据上 **通过 2 / 跳过 26 / 失败 0**（幂等吸收成功）；行数报告 m_customer=5 / m_material=7 / m_test_item=3 / b_truck_lot=5 / b_bag=10 / b_inspection=3 / b_feed_record=13 / b_fg_bag=8 / b_shipment=2。
+
+**D3 · 在案数据**
+
+- FL1=444 / FL2=445 超前建成问题：**投料补齐后已自然闭合**（谱系 `has_flow=True`），无需重建；出货单 342 保留。
+
+**D4 · 验证**
+
+- dry-run ＋ `--apply` 在测试库均成功（见上）。
+- ★ 谱系抽测：任务包写的 `GET /api/prod/genealogy/bags/<E码>` **对 E 码恒 400**（`GenealogyByBagCode` 只收 B 码）⇒ 改用 **`GET /api/trace/backward?fg_code=<E码>`**，实测 `1ECG0301031126102101001001Z` ⇒ **has_flow=true**，backward 全链（E→D→C→投料→车次，含结论与逐项结果）可见。
+- 门禁 `bash scripts/check_all.sh` **11/11 全绿**。
+
+**D5 · 边界（如实声明）**
+
+- 真机标签打印等 **APP 侧事项不在范围**；不新增权限点；不改既有端点行为。
+- 脚本属仓库资产，**不在生产数据上误跑**（清库后的测试库用）；只本地提交不 push。
 
 ## 5. 已决议
 
