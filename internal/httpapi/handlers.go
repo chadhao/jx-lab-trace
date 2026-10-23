@@ -289,11 +289,18 @@ func (s *Server) handleMe(c echo.Context) error {
 	if p == nil {
 		return echo.NewHTTPError(http.StatusUnauthorized, "未登录")
 	}
+	// ★ N-030：APP 首页入口权限判定依赖 —— 聚合「启用」角色的非 NONE 权限点
+	//   （口径与 RolesOf 一致，仅新增字段，既有字段原样）。
+	perms, err := s.Store.PermissionCodesFor(c.Request().Context(), p.OpenID)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "查询权限点失败")
+	}
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"open_id":   p.OpenID,
-		"name":      p.Name,
-		"roles":     orEmpty(p.Roles),
-		"sys_roles": orEmpty(p.SysRoles),
+		"open_id":     p.OpenID,
+		"name":        p.Name,
+		"roles":       orEmpty(p.Roles),
+		"sys_roles":   orEmpty(p.SysRoles),
+		"permissions": orEmpty(perms),
 	})
 }
 

@@ -41,6 +41,37 @@ func (s *Store) RolesOf(ctx context.Context, openID string) ([]Role, error) {
 	return out, rows.Err()
 }
 
+// PermissionCodesFor 返回账号在「启用」角色下聚合出的权限点 code 并集（N-030）。
+// 口径与 RolesOf / LevelsFor 一致：仅 s_role.status='启用' 的角色参与聚合
+// （停用角色的授权不生效）；level='NONE' 视为未授权，不计入
+// （与 permission.Union 剔除 NONE 的语义一致 —— 否则种子矩阵每格都有行，
+// 任何有角色的账号都会凑满 51 点，聚合失去意义）。
+// 输出按 code 字典序稳定排序（契约确定性）；无角色或无非 NONE 授权
+// ⇒ 空切片（非 nil，JSON 序列化为 []）。
+func (s *Store) PermissionCodesFor(ctx context.Context, openID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT rp.point_code
+		  FROM s_role_permission rp
+		  JOIN s_user_role ur ON ur.role_code = rp.role_code
+		  JOIN s_role r ON r.code = ur.role_code AND r.status = '启用'
+		 WHERE ur.open_id = ? AND rp.level <> 'NONE'
+		 ORDER BY rp.point_code`, openID)
+	if err != nil {
+		return nil, fmt.Errorf("查询权限点并集失败: %w", err)
+	}
+	defer rows.Close()
+
+	out := []string{}
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, fmt.Errorf("读取权限点失败: %w", err)
+		}
+		out = append(out, code)
+	}
+	return out, rows.Err()
+}
+
 // LevelsFor 返回账号在**某权限点**上持有的级别并集：
 // 多角色取并集；无记录 ⇒ 空集合 ⇒ 判 NONE（docs/01 §8.0/§8.3）。
 func (s *Store) LevelsFor(ctx context.Context, openID string, point permission.Code) (permission.Levels, error) {

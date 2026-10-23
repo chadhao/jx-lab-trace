@@ -2297,8 +2297,25 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-14.md`**。★ **口径裁定：与 `RolesOf` 一致——仅聚合「启用」角色**（停用角色授权不生效，与既有权限判定口径一致；APP 参考 SQL 未过滤 status 属其简化，后端自裁权在本侧，回执必写明）。★ 列名以实际 schema 为准（`point_code`）；输出排序稳定；新增只读 store 方法（复用 RolesOf JOIN 模式）。★ TC 五条：sysadmin 51 点／production 子集／停用角色口径／无角色空数组／形状回归。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：`/api/me` 响应新增一字段＋一个只读 store 方法；不改矩阵/权限点/RolesOf。
-- **状态**：OPEN
-- **最后更新**：2026-10-23 12:35
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-23 13:45
+
+**mimo 回执 · 2026-10-23 13:45**
+
+- **交付**（任务包 `MIMO-NEXT-FIX-14.md`）：
+  - **D1**：`internal/store/permission.go` 新增只读 `PermissionCodesFor(ctx, openID)` —— `s_role_permission × s_user_role × s_role` JOIN，**仅「启用」角色**、`level <> 'NONE'`、`DISTINCT` 去重、按 `point_code` 字典序稳定排序、无授权 ⇒ 空切片（非 nil）。`internal/httpapi/handlers.go` 的 `handleMe` 挂上，`/api/me` 响应新增 `permissions: string[]`。
+  - ★ **口径声明（必须记录）**：**与 `RolesOf` 一致——仅聚合「启用」角色**（`s_role.status='启用'`）。停用角色的授权不生效，与既有权限判定（`LevelsFor`/`RequirePerm`）口径一致。APP 参考 SQL 未过滤 status 属其示例简化——后端自裁权在本侧，已按任务包裁定。
+  - ★ `level='NONE'` 不计入：种子矩阵每格都有行（51×6=306），若不过滤 NONE 任何有角色账号都会凑满 51 点、聚合失去意义（与 `permission.Union` 剔除 NONE 语义一致）。
+  - **D2 兼容性**：仅新增字段；`open_id/name/roles/sys_roles` 原样（TC-N030-05 钉住）；无角色 ⇒ `"permissions":[]` 非 null（TC-N030-04 读原始 JSON 钉死）；Web 端既有用例全绿（`go test ./...` 门禁覆盖）。
+  - **D3 TC 五条**（`internal/httpapi/n030_test.go`，DB 集成、`JX_TEST_DB=1` 门控）：
+    1. **sysadmin 聚合**：集合与库内实况相等（独立 IN 子查询复算，避免同形假绿）＋ 种子锁定的 5 个管理域点恒 ∈；★ **矩阵后台可配**（N-029 验收教训）⇒ 不钉死「51」这个数字，钉「全部启用角色 × 非 NONE 并集」口径本身——全授权矩阵下即为 51 点。
+    2. **production 子集**：`sample.take`/`prod.feed.scan` ∈；`ship.load.scan` ∉；`sys.perm.edit` ∉（业务角色不越权管理域）；集合仍与库内实况相等。
+    3. **停用角色口径**：造停用角色仅授 `recv.arrive.confirm=ALL`（production 对该点 NONE）⇒ 停用态 ∉ / 启用后立即 ∈ / 再停用立即 ∉（无缓存，三段对称）。
+    4. **无角色**：`"permissions":[]`（原始 JSON 含 `"permissions":[]` 字面，非 null）。
+    5. **形状回归**：五键齐全、`open_id`/`sys_roles` 原样、`roles` 与 `sys_roles` 同源等长、permissions 字典序、与 Store 直查一致。
+- **未做/边界**：服务器部署与 curl 三对照（sysadmin/production/空数组）留给验收侧（WorkBuddy 独立验收惯例）；不改矩阵、不新增权限点、不动 `RolesOf`（只加只读聚合）。
+- **门禁**：`bash scripts/check_all.sh` **必绿 11/11 全绿**（gofmt/build/vet/test/md 表格/COLLAB 台账/锚点/UC↔TC/spec 机读/权限点规格/权限点注册）。
+- **提交**：显式路径、只本地提交不 push。
 
 ## 5. 已决议
 
