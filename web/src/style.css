@@ -37,6 +37,13 @@ code {
   font-size: 0.9rem;
 }
 
+.field-hint {
+  display: block;
+  color: #6e7781;
+  font-size: 0.8rem;
+  margin-top: 0.15rem;
+}
+
 /* ===== 批 2 · 主数据页与权限配置页 ===== */
 
 main {

@@ -10,14 +10,16 @@ const ENTITIES = [
   {
     key: 'customers', name: '客户', perm: 'md.customer',
     fields: [
-      { k: 'code', l: '客户编号(4位)', req: true },
+      // ★ N-032：创建时只读（保存后由系统自动分配）；修改时保持可编辑（兼容显式 code）
+      { k: 'code', l: '客户编号', req: true, readonlyCreate: true, ph: '保存后自动分配' },
       { k: 'name', l: '名称', req: true },
       { k: 'short_name', l: '简称' },
       { k: 'contact', l: '联系人' },
       { k: 'phone', l: '电话' },
-      { k: 'is_internal', l: '集团内(0/1)', t: 'int' },
+      { k: 'is_internal', l: '集团内', t: 'int', opts: [{ v: 0, l: '否' }, { v: 1, l: '是' }], def: 0 },
+      { k: 'is_outsourced', l: '委外单位', t: 'int', opts: [{ v: 0, l: '否' }, { v: 1, l: '是' }], def: 0, hint: '委外单位＝加工/仓储等外部协作方' },
     ],
-    cols: ['code', 'name', 'short_name', 'contact', 'phone', 'status', 'version'],
+    cols: ['code', 'name', 'short_name', 'contact', 'phone', { k: 'is_internal', l: '集团内', bool: true }, { k: 'is_outsourced', l: '委外', bool: true }, 'status', 'version'],
   },
   {
     key: 'compositions', name: '原料组成', perm: 'md.material',
@@ -139,6 +141,9 @@ function pick(ent) {
 function openCreate() {
   editing.value = null
   form.value = {}
+  for (const f of cur.value.fields) {
+    if (f.def !== undefined) form.value[f.k] = f.def
+  }
   reason.value = ''
   formErr.value = ''
   showForm.value = true
@@ -166,6 +171,8 @@ async function submit() {
   formErr.value = ''
   const values = {}
   for (const f of cur.value.fields) {
+    // 创建时只读字段（如客户编号自动分配）不提交
+    if (!editing.value && f.readonlyCreate) continue
     if (f.req && (form.value[f.k] === '' || form.value[f.k] === null || form.value[f.k] === undefined)) {
       formErr.value = `「${f.l}」必填`
       return
@@ -180,8 +187,9 @@ async function submit() {
         { values, reason: reason.value })
       msg.value = '已产生新版本（原版本保留可查）'
     } else {
-      await api.post(`/api/md/${cur.value.key}`, { values })
-      msg.value = '新增成功'
+      const res = await api.post(`/api/md/${cur.value.key}`, { values })
+      const assigned = res && res.row && res.row.code
+      msg.value = assigned ? `新增成功，客户编号：${assigned}` : '新增成功'
     }
     showForm.value = false
     await load()
@@ -213,11 +221,18 @@ async function showHistory(row) {
 }
 
 function cell(row, col) {
-  const v = row[col]
+  const key = typeof col === 'object' ? col.k : col
+  const v = row[key]
   if (v === null || v === undefined) return ''
+  if (typeof col === 'object' && col.bool) {
+    return (v === 1 || v === '1' || v === true) ? '是' : '否'
+  }
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
 }
+
+function colKey(col) { return typeof col === 'object' ? col.k : col }
+function colLabel(col) { return typeof col === 'object' ? (col.l || col.k) : col }
 
 watch(q, () => load())
 onMounted(load)
@@ -254,13 +269,13 @@ onMounted(load)
     <table>
       <thead>
         <tr>
-          <th v-for="c in cur.cols" :key="c">{{ c }}</th>
+          <th v-for="c in cur.cols" :key="colKey(c)">{{ colLabel(c) }}</th>
           <th>操作</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="r in rows" :key="r.id">
-          <td v-for="c in cur.cols" :key="c">{{ cell(r, c) }}</td>
+          <td v-for="c in cur.cols" :key="colKey(c)">{{ cell(r, c) }}</td>
           <td class="ops">
             <button class="ghost" @click="openEdit(r)">修改</button>
             <button class="ghost" @click="showHistory(r)">历史</button>
@@ -294,7 +309,7 @@ onMounted(load)
             <td>{{ c.valid_to || '—' }}</td>
             <td class="hist">
               <template v-for="f in cur.fields" :key="f.k">
-                <span class="kv"><i>{{ f.l }}</i> {{ cell(c, f.k) }}</span>
+                <span class="kv"><i>{{ f.l }}</i> {{ cell(c, f) }}</span>
               </template>
             </td>
           </tr>
@@ -310,11 +325,17 @@ onMounted(load)
       </div>
       <div class="form">
         <label v-for="f in cur.fields" :key="f.k">
-          <span>{{ f.l }}<em v-if="f.req">*</em></span>
+          <span>{{ f.l }}<em v-if="f.req && !f.readonlyCreate">*</em></span>
           <select v-if="f.opts" v-model="form[f.k]">
-            <option v-for="o in f.opts" :key="o" :value="o">{{ o }}</option>
+            <option v-for="o in f.opts" :key="typeof o === 'object' ? o.v : o"
+                    :value="typeof o === 'object' ? o.v : o">
+              {{ typeof o === 'object' ? o.l : o }}
+            </option>
           </select>
-          <input v-else v-model="form[f.k]" :placeholder="f.l" />
+          <input v-else-if="f.readonlyCreate && !editing" :value="form[f.k] || ''"
+                 :placeholder="f.ph || f.l" readonly />
+          <input v-else v-model="form[f.k]" :placeholder="f.ph || f.l" />
+          <small v-if="f.hint" class="field-hint">{{ f.hint }}</small>
         </label>
         <label v-if="editing" class="full">
           <span>更正原因<em>*</em></span>
