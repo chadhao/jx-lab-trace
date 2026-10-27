@@ -93,6 +93,11 @@ func (s *Store) Migrate(ctx context.Context, bootstrapOpenID string) (MigrateRes
 	if err := migrateRecvBatchShape(ctx, tx); err != nil {
 		return res, err
 	}
+	// ①.6 N-032 结构演进：已存在的 m_customer 走幂等 ALTER ＋ is_outsourced 列
+	//   （新库由 schema.sql 直接建出含列形状 ⇒ 前置检查落空 ⇒ 零操作）。
+	if err := migrateCustomerOutsourcedShape(ctx, tx); err != nil {
+		return res, err
+	}
 
 	var spec permSpec
 	if err := json.Unmarshal(migrations.PermissionSpecJSON, &spec); err != nil {
@@ -274,6 +279,39 @@ func migrateRecvBatchShape(ctx context.Context, tx *sql.Tx) error {
 	} else if !ok {
 		if err := run(`ALTER TABLE b_arrival_notice ADD INDEX idx_batch_seq (batch_id, seq_no)`); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// migrateCustomerOutsourcedShape 幂等地把**已存在**的 m_customer 演进到 N-032 形状：
+//
+//	＋ is_outsourced 列（旧行 DEFAULT 0 = 非委外）
+//
+// ★ 每一步都先查 information_schema 再动 ⇒ 新库（schema.sql 已是新形状）零操作、
+//
+//	旧库首跑补齐、二跑零操作 —— 与 CREATE TABLE 路径同一套幂等判据。
+//
+// ★ 只加列不改表数（表数仍 39）；不删不改既有列/行。
+func migrateCustomerOutsourcedShape(ctx context.Context, tx *sql.Tx) error {
+	exists, err := tableExists(ctx, tx, "m_customer")
+	if err != nil || !exists {
+		return err // 表不存在 ⇒ 新库路径，CREATE 语句会带出新形状
+	}
+	hasCol := func(table, col string) (bool, error) {
+		var n int
+		err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM information_schema.columns
+			  WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+			table, col).Scan(&n)
+		return n > 0, err
+	}
+	if ok, err := hasCol("m_customer", "is_outsourced"); err != nil {
+		return err
+	} else if !ok {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE m_customer
+  ADD COLUMN is_outsourced TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否委外单位（仅 0/1）' AFTER is_internal`); err != nil {
+			return fmt.Errorf("N-032 结构演进失败（m_customer.is_outsourced）: %w", err)
 		}
 	}
 	return nil

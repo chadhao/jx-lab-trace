@@ -240,6 +240,7 @@ func mdErr(err error) error {
 		return echo.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, store.ErrMDDuplicate),
 		errors.Is(err, store.ErrMDStale),
+		errors.Is(err, store.ErrMDCodeExhausted),
 		errors.Is(err, store.ErrBuiltinRole),
 		errors.Is(err, store.ErrDeadlockGuard),
 		errors.Is(err, store.ErrLastAdmin),

@@ -51,6 +51,7 @@ var (
 	ErrMDBadInput       = errors.New("输入不合法")
 	ErrMDNeedReason     = errors.New("更正业务字段必须填写原因")
 	ErrMDNoChange       = errors.New("内容未变化")
+	ErrMDCodeExhausted  = errors.New("客户编号已用尽")
 )
 
 // MDEntity 描述一张主数据表的可写面与语义。
@@ -107,6 +108,37 @@ func oneOf(values map[string]interface{}, key string, allowed ...string) error {
 	return fmt.Errorf("%w：字段 %s 只允许 %s（收到 %q）", ErrMDBadInput, key, strings.Join(allowed, " / "), got)
 }
 
+// validateBool01 校验布尔字段仅接受 0/1（含字符串 "0"/"1"、bool）。
+// 缺省/nil/空串 ⇒ 合法（走列默认值）。其它值（2、"是" 等）⇒ 400。
+func validateBool01(values map[string]interface{}, key, label string) error {
+	v, ok := values[key]
+	if !ok || v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case int64:
+		if t == 0 || t == 1 {
+			return nil
+		}
+	case int:
+		if t == 0 || t == 1 {
+			return nil
+		}
+	case float64:
+		if t == 0 || t == 1 {
+			return nil
+		}
+	case bool:
+		return nil
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" || s == "0" || s == "1" {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w：%s只能是 0/1", ErrMDBadInput, label)
+}
+
 // mdEntities 是 8 张主数据表的注册表（键 = URL 段）。
 // ★ 列名与 spec/schema.sql 严格对齐，由 TestMDEntitiesMatchSpec 逐列机检。
 var mdEntities = []MDEntity{
@@ -114,17 +146,23 @@ var mdEntities = []MDEntity{
 		Key: "customers", Table: "m_customer", Label: "客户",
 		Perm: permission.MdCustomer, Versioned: true, HasValid: true,
 		BizKey:   []string{"code"},
-		Writable: []string{"code", "name", "short_name", "contact", "phone", "is_internal", "external_id"},
-		Required: []string{"code", "name"},
+		Writable: []string{"code", "name", "short_name", "contact", "phone", "is_internal", "is_outsourced", "external_id"},
+		Required: []string{"name"},
 		NameCol:  "name",
+		// ★ N-032：code 创建时可缺省（系统自动分配 MAX+1）；显式传入仍须 4 位数字。
+		// ★ is_internal / is_outsourced 仅接受 0/1（防脏数据从 API 直入）。
 		Validate: func(values map[string]interface{}) error {
-			if err := requireStr(values, "code", "name"); err != nil {
+			if err := requireStr(values, "name"); err != nil {
 				return err
 			}
-			if !digits4.MatchString(strings.TrimSpace(strVal(values["code"]))) {
+			code := strings.TrimSpace(strVal(values["code"]))
+			if code != "" && !digits4.MatchString(code) {
 				return fmt.Errorf("%w：客户编号必须是 4 位数字", ErrMDBadInput)
 			}
-			return nil
+			if err := validateBool01(values, "is_internal", "集团内"); err != nil {
+				return err
+			}
+			return validateBool01(values, "is_outsourced", "委外单位")
 		},
 	},
 	{
@@ -442,6 +480,12 @@ func (s *Store) MDHistory(ctx context.Context, key string, id int64) ([]MDRow, e
 }
 
 // MDCreate 新增一条主数据（version=1、is_current=1）。
+//
+// ★ N-032：客户（customers）创建时 code 可缺省/空 ⇒ 系统自动分配「全表所有版本 MAX(code)+1」
+//
+//	左补零 4 位（首号 0001）；分配在事务内加锁（FOR UPDATE），撞号重试一次；
+//	上限 9999 用尽 ⇒ ErrMDCodeExhausted（HTTP 409）。
+//	★ 兼容红线：显式传 code 时保持现行为（4 位数字校验＋唯一性）。
 func (s *Store) MDCreate(ctx context.Context, key string, values map[string]interface{}, actor MDActor) (MDRow, error) {
 	e, err := mdEntityForWrite(key)
 	if err != nil {
@@ -454,14 +498,35 @@ func (s *Store) MDCreate(ctx context.Context, key string, values map[string]inte
 	if err := e.Validate(allValues(e, fields, nil)); err != nil {
 		return MDRow{}, err
 	}
+	autoCode := e.Key == "customers" && strings.TrimSpace(strVal(fields["code"])) == ""
 
+	// 撞号重试一次（仅自动编号路径）
+	for attempt := 0; ; attempt++ {
+		row, err := s.mdCreateOnce(ctx, e, fields, autoCode, actor)
+		if err == nil {
+			return row, nil
+		}
+		if autoCode && attempt == 0 && isDuplicateErr(err) {
+			continue // 撞号 ⇒ 重读 MAX 再试一次
+		}
+		return nil, err
+	}
+}
+
+func (s *Store) mdCreateOnce(ctx context.Context, e MDEntity, fields map[string]interface{}, autoCode bool, actor MDActor) (MDRow, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("开启事务失败: %w", err)
 	}
 	defer tx.Rollback()
 
-	if err := mdCheckDuplicate(ctx, tx, e, fields, 0); err != nil {
+	if autoCode {
+		code, err := mdAllocCustomerCode(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		fields["code"] = code
+	} else if err := mdCheckDuplicate(ctx, tx, e, fields, 0); err != nil {
 		return nil, err
 	}
 
@@ -506,7 +571,7 @@ func (s *Store) MDCreate(ctx context.Context, key string, values map[string]inte
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("提交失败: %w", err)
 	}
-	return s.MDGet(ctx, key, newID)
+	return s.MDGet(ctx, e.Key, newID)
 }
 
 // MDUpdate 修改业务字段：
@@ -525,6 +590,12 @@ func (s *Store) MDUpdate(ctx context.Context, key string, id int64, values map[s
 	fields, err := sanitizeMDValues(e, values, false)
 	if err != nil {
 		return nil, err
+	}
+	// ★ N-032：更新路径不得把 code 清空（自动分配只在创建时发生）。
+	if e.Key == "customers" {
+		if v, ok := fields["code"]; ok && strings.TrimSpace(strVal(v)) == "" {
+			return nil, fmt.Errorf("%w：客户编号不能为空", ErrMDBadInput)
+		}
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -844,6 +915,26 @@ func mdSelectForUpdate(ctx context.Context, tx *sql.Tx, e MDEntity, id int64) (M
 		return nil, ErrMDRowNotFound
 	}
 	return list[0], nil
+}
+
+// mdAllocCustomerCode 在事务内分配下一个客户编号：
+// 取全表所有版本 MAX(CAST(code AS UNSIGNED))+1，左补零 4 位（首号 0001）。
+// ★ FOR UPDATE 锁住参与扫描的行 ⇒ 并发分配串行化；上限 9999 用尽 ⇒ ErrMDCodeExhausted。
+func mdAllocCustomerCode(ctx context.Context, tx *sql.Tx) (string, error) {
+	var maxCode sql.NullInt64
+	err := tx.QueryRowContext(ctx,
+		`SELECT MAX(CAST(code AS UNSIGNED)) FROM m_customer FOR UPDATE`).Scan(&maxCode)
+	if err != nil {
+		return "", fmt.Errorf("读取客户编号最大值失败: %w", err)
+	}
+	next := int64(1)
+	if maxCode.Valid {
+		next = maxCode.Int64 + 1
+	}
+	if next > 9999 {
+		return "", ErrMDCodeExhausted
+	}
+	return fmt.Sprintf("%04d", next), nil
 }
 
 func mdIsCurrent(row MDRow) bool {

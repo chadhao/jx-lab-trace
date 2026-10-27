@@ -28,12 +28,13 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 CREATE TABLE m_customer (
   id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  code          CHAR(4)         NOT NULL COMMENT '4 位数字客户编号，全局唯一',
+  code          CHAR(4)         NOT NULL COMMENT '4 位数字客户编号，全局唯一；创建时可缺省由系统自动分配 MAX+1',
   name          VARCHAR(128)    NOT NULL,
   short_name    VARCHAR(64)     NULL,
   contact       VARCHAR(64)     NULL,
   phone         VARCHAR(32)     NULL,
-  is_internal   TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否集团内',
+  is_internal   TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否集团内（仅 0/1）',
+  is_outsourced TINYINT(1)      NOT NULL DEFAULT 0 COMMENT '是否委外单位（仅 0/1）',
   status        VARCHAR(16)     NOT NULL DEFAULT '启用',
   external_id   VARCHAR(64)     NULL COMMENT '为日后 ERP 接管留主键映射位',
   version       INT             NOT NULL DEFAULT 1,

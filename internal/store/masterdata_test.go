@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -450,5 +452,259 @@ func TestLimit_CRUDAndLookup_SQL(t *testing.T) {
 	}
 }
 
+// ===== N-032 · 客户编号自动递增 ＋ is_internal/is_outsourced 校验 =====
+
+// n032CurrentMax 返回全表（含历史版本）当前 MAX(code) 数值；空表返回 0。
+func n032CurrentMax(t *testing.T, st *Store) int64 {
+	t.Helper()
+	var max sql.NullInt64
+	if err := st.db.QueryRow(`SELECT MAX(CAST(code AS UNSIGNED)) FROM m_customer`).Scan(&max); err != nil {
+		t.Fatalf("读取 MAX(code) 失败: %v", err)
+	}
+	if !max.Valid {
+		return 0
+	}
+	return max.Int64
+}
+
+// TC-N032-01 自动编号：连续建 2 个客户（不传 code）⇒ 编号递增连续，与既有最大编号衔接。
+// ★ 基数取**全表全版本 MAX(code)**（含业务数据），不假定空表。
+func TestTC_N032_01_AutoCodeIncrement(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	wipeMD(t, st, "m_customer")
+	t.Cleanup(func() {
+		_, _ = st.db.ExecContext(ctx, `DELETE FROM m_customer WHERE created_by LIKE 'ou\_test\_m1%'`)
+	})
+
+	base := n032CurrentMax(t, st)
+	if base >= 9999 {
+		t.Skipf("库内 MAX(code)=%d 已占满上限，跳过递增用例", base)
+	}
+	want1 := fmt.Sprintf("%04d", base+1)
+	want2 := fmt.Sprintf("%04d", base+2)
+
+	r1, err := st.MDCreate(ctx, "customers", map[string]interface{}{
+		"name": "自动编号甲",
+	}, mdTestActor())
+	if err != nil {
+		t.Fatalf("自动编号创建失败: %v", err)
+	}
+	if r1["code"] != want1 {
+		t.Fatalf("首个自动编号应为 %s（全表 MAX+1），实际 %v", want1, r1["code"])
+	}
+
+	r2, err := st.MDCreate(ctx, "customers", map[string]interface{}{
+		"name": "自动编号乙",
+	}, mdTestActor())
+	if err != nil {
+		t.Fatalf("自动编号创建失败: %v", err)
+	}
+	if r2["code"] != want2 {
+		t.Fatalf("第二个自动编号应为 %s（递增连续），实际 %v", want2, r2["code"])
+	}
+}
+
+// TC-N032-02 首号：整表为空时自动编号应从 0001 开始；非空则断言 4 位且 = MAX+1。
+func TestTC_N032_02_AutoCodeFirstNumber(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	wipeMD(t, st, "m_customer")
+	t.Cleanup(func() {
+		_, _ = st.db.ExecContext(ctx, `DELETE FROM m_customer WHERE created_by LIKE 'ou\_test\_m1%'`)
+	})
+
+	var total int
+	if err := st.db.QueryRow(`SELECT COUNT(*) FROM m_customer`).Scan(&total); err != nil {
+		t.Fatalf("统计失败: %v", err)
+	}
+	r, err := st.MDCreate(ctx, "customers", map[string]interface{}{
+		"name": "首号客户",
+	}, mdTestActor())
+	if err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+	code := fmt.Sprint(r["code"])
+	if total == 0 {
+		if code != "0001" {
+			t.Fatalf("空表首号应为 0001，实际 %v", code)
+		}
+		return
+	}
+	if !digits4.MatchString(code) {
+		t.Fatalf("自动编号应 4 位数字，实际 %q", code)
+	}
+}
+
+// TC-N032-03 显式编号兼容：传 code 仍可建（4 位校验＋唯一冲突）。
+func TestTC_N032_03_ExplicitCodeCompatible(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	wipeMD(t, st, "m_customer")
+	t.Cleanup(func() {
+		_, _ = st.db.ExecContext(ctx, `DELETE FROM m_customer WHERE created_by LIKE 'ou\_test\_m1%'`)
+	})
+
+	r, err := st.MDCreate(ctx, "customers", map[string]interface{}{
+		"code": "9301", "name": "显式编号客户",
+	}, mdTestActor())
+	if err != nil {
+		t.Fatalf("显式编号创建应成功: %v", err)
+	}
+	if r["code"] != "9301" {
+		t.Fatalf("显式编号应保持原值，实际 %v", r["code"])
+	}
+
+	// 同 code 再建 ⇒ 唯一冲突
+	_, err = st.MDCreate(ctx, "customers", map[string]interface{}{
+		"code": "9301", "name": "重号客户",
+	}, mdTestActor())
+	if err == nil || !isErr(err, ErrMDDuplicate) {
+		t.Fatalf("同 code 再建应返回 ErrMDDuplicate，实际: %v", err)
+	}
+
+	// 非 4 位 ⇒ 400
+	_, err = st.MDCreate(ctx, "customers", map[string]interface{}{
+		"code": "93", "name": "短编号",
+	}, mdTestActor())
+	if err == nil || !isErr(err, ErrMDBadInput) {
+		t.Fatalf("非 4 位编号应返回 ErrMDBadInput，实际: %v", err)
+	}
+}
+
+// TC-N032-04 上限：9999 已在表内（直插或已存在）⇒ 自动新建返回 ErrMDCodeExhausted。
+func TestTC_N032_04_CodeExhausted(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	wipeMD(t, st, "m_customer")
+	t.Cleanup(func() {
+		_, _ = st.db.ExecContext(ctx, `DELETE FROM m_customer WHERE created_by LIKE 'ou\_test\_m1%'`)
+	})
+
+	// 保证 9999 存在（若业务数据已达 9999 则无需再插）
+	if n032CurrentMax(t, st) < 9999 {
+		if _, err := st.db.ExecContext(ctx,
+			`INSERT INTO m_customer (code, name, status, version, is_current, created_by)
+			 VALUES ('9999', '上限客户', '启用', 1, 1, 'ou_test_m1_qc')`); err != nil {
+			t.Fatalf("预置 9999 失败: %v", err)
+		}
+	}
+
+	_, err := st.MDCreate(ctx, "customers", map[string]interface{}{
+		"name": "应被拒的客户",
+	}, mdTestActor())
+	if err == nil || !isErr(err, ErrMDCodeExhausted) {
+		t.Fatalf("编号用尽应返回 ErrMDCodeExhausted，实际: %v", err)
+	}
+}
+
+// TC-N032-05 单选校验：is_internal / is_outsourced 传 2 / "是" ⇒ 400。
+func TestTC_N032_05_Bool01Validation(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	wipeMD(t, st, "m_customer")
+	t.Cleanup(func() {
+		_, _ = st.db.ExecContext(ctx, `DELETE FROM m_customer WHERE created_by LIKE 'ou\_test\_m1%'`)
+	})
+
+	for _, bad := range []struct {
+		field string
+		val   interface{}
+	}{
+		{"is_internal", 2},
+		{"is_internal", "是"},
+		{"is_outsourced", 2},
+		{"is_outsourced", "是"},
+		{"is_outsourced", "否"},
+	} {
+		values := map[string]interface{}{"name": "校验客户", bad.field: bad.val}
+		_, err := st.MDCreate(ctx, "customers", values, mdTestActor())
+		if err == nil || !isErr(err, ErrMDBadInput) {
+			t.Fatalf("%s=%v 应返回 ErrMDBadInput，实际: %v", bad.field, bad.val, err)
+		}
+	}
+}
+
+// TC-N032-06 新字段往返：建客户 is_outsourced=1 ⇒ 详情/列表回读为 1。
+func TestTC_N032_06_OutsourcedRoundtrip(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	wipeMD(t, st, "m_customer")
+	t.Cleanup(func() {
+		_, _ = st.db.ExecContext(ctx, `DELETE FROM m_customer WHERE created_by LIKE 'ou\_test\_m1%'`)
+	})
+
+	r, err := st.MDCreate(ctx, "customers", map[string]interface{}{
+		"name": "委外客户", "is_outsourced": 1, "is_internal": 0,
+	}, mdTestActor())
+	if err != nil {
+		t.Fatalf("创建失败: %v", err)
+	}
+	id := toInt64(r["id"])
+	if toInt64(r["is_outsourced"]) != 1 {
+		t.Fatalf("创建返回 is_outsourced 应为 1，实际 %v", r["is_outsourced"])
+	}
+
+	// 详情
+	got, err := st.MDGet(ctx, "customers", id)
+	if err != nil {
+		t.Fatalf("详情查询失败: %v", err)
+	}
+	if toInt64(got["is_outsourced"]) != 1 {
+		t.Fatalf("详情 is_outsourced 应为 1，实际 %v", got["is_outsourced"])
+	}
+
+	// 列表
+	list, err := st.MDList(ctx, "customers", MDOpts{Search: "委外客户"})
+	if err != nil || len(list) == 0 {
+		t.Fatalf("列表查询失败: %v / %d 行", err, len(list))
+	}
+	found := false
+	for _, row := range list {
+		if toInt64(row["id"]) == id {
+			found = true
+			if toInt64(row["is_outsourced"]) != 1 {
+				t.Fatalf("列表 is_outsourced 应为 1，实际 %v", row["is_outsourced"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("列表中应能找到该客户")
+	}
+}
+
 // isErr 判断错误链里是否含某个哨兵错误。
 func isErr(err, target error) bool { return errors.Is(err, target) }
+
+// TC-N032-05b 纯单测：validateBool01 三象限（不连库）。
+func TestTC_N032_05b_ValidateBool01_Unit(t *testing.T) {
+	ok := func(v interface{}) {
+		t.Helper()
+		if err := validateBool01(map[string]interface{}{"f": v}, "f", "集团内"); err != nil {
+			t.Fatalf("%#v 应合法，实际 %v", v, err)
+		}
+	}
+	bad := func(v interface{}) {
+		t.Helper()
+		err := validateBool01(map[string]interface{}{"f": v}, "f", "集团内")
+		if err == nil || !isErr(err, ErrMDBadInput) {
+			t.Fatalf("%#v 应 ErrMDBadInput，实际 %v", v, err)
+		}
+		if !strings.Contains(err.Error(), "集团内只能是 0/1") {
+			t.Fatalf("文案应含「集团内只能是 0/1」，实际 %v", err)
+		}
+	}
+	ok(nil)
+	ok(int64(0))
+	ok(int64(1))
+	ok(float64(0))
+	ok(float64(1))
+	ok("0")
+	ok("1")
+	ok(true)
+	ok("")
+	bad(2)
+	bad(int64(2))
+	bad("是")
+	bad("2")
+}

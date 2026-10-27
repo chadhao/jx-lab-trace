@@ -214,6 +214,34 @@
       "file": "internal/store/batch.go",
       "pattern": "binary\\.BigEndian\\.Uint16",
       "desc": "F 码随机防撞段（分钟时间戳+随机；秒级进位方案已按 TC 实测废弃）"
+    },
+    {
+      "id": "N032-01",
+      "kind": "schema_column_present",
+      "table": "m_customer",
+      "column": "is_outsourced",
+      "desc": "客户表有委外单位列（TINYINT(1) DEFAULT 0，仅 0/1）"
+    },
+    {
+      "id": "N032-02",
+      "kind": "source_regex",
+      "file": "internal/store/masterdata.go",
+      "pattern": "mdAllocCustomerCode",
+      "desc": "客户编号自动分配实现存在（MAX+1 左补零，事务内加锁）"
+    },
+    {
+      "id": "N032-03",
+      "kind": "source_regex",
+      "file": "internal/store/masterdata.go",
+      "pattern": "ErrMDCodeExhausted",
+      "desc": "编号上限 9999 用尽返回专用错误（HTTP 409）"
+    },
+    {
+      "id": "N032-04",
+      "kind": "source_regex",
+      "file": "internal/store/masterdata.go",
+      "pattern": "validateBool01",
+      "desc": "is_internal/is_outsourced 后端校验仅 0/1"
     }
   ]
 }
