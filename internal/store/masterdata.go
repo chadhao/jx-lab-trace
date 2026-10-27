@@ -130,6 +130,11 @@ func validateBool01(values map[string]interface{}, key, label string) error {
 		}
 	case bool:
 		return nil
+	case json.Number:
+		// ★ scanMDRows 归一后的 TINYINT 是 json.Number（更新路径合并旧行时必经）
+		if s := t.String(); s == "0" || s == "1" {
+			return nil
+		}
 	case string:
 		s := strings.TrimSpace(t)
 		if s == "" || s == "0" || s == "1" {
