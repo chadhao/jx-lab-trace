@@ -2441,7 +2441,7 @@
 **D5 · 交付（门禁 / 部署 / curl 实测）**
 
 - ★ **门禁 `bash scripts/check_all.sh` 11/11 全绿**（含 spec 双引擎 32 条判据）。
-- ★ **部署测试服务器**（`deploy-test-server.sh --restart --smoke`）：`/healthz` 200、`version=b3ba0fe-dirty`（部署时工作区 dirty，**healthz＝提交无 dirty 待提交后复核**）；幂等 ALTER 实测 `is_outsourced` 列已在库。
+- ★ **部署测试服务器**（`deploy-test-server.sh --restart --smoke`）：`/healthz` 200、**`version=bf18266`（无 dirty）**；幂等 ALTER 实测 `is_outsourced` 列已在库。
 - ★ **curl 实测**（服务器 `127.0.0.1:18080`）：
   - 连建 2 客户（不传 code）⇒ **`0001` → `0002`** 递增连续；
   - 显式 `0301`+`0500` 后自动 ⇒ **`0501` → `0502`**（与既有最大编号衔接正确）；
