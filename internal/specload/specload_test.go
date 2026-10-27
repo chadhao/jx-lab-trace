@@ -62,7 +62,8 @@ func TestSpecChecks_DualEngineAgree(t *testing.T) {
 	text := string(out)
 
 	// 解析 Python 侧逐条判定：行首 "  ok   ID" / "  FAIL ID"
-	lineRe := regexp.MustCompile(`(?m)^\s+(ok|FAIL)\s+(N023-\d+)`)
+	// ★ ID 形如 N023-01 / N032-01 等（前缀可能随议题变化），用通用 pattern。
+	lineRe := regexp.MustCompile(`(?m)^\s+(ok|FAIL)\s+([A-Z0-9]+-\d+)`)
 	pyVerdict := map[string]bool{}
 	for _, m := range lineRe.FindAllStringSubmatch(text, -1) {
 		pyVerdict[m[2]] = m[1] == "ok"

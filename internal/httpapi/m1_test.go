@@ -343,3 +343,104 @@ func TestMD_ReadOnlyRoleCannotWrite(t *testing.T) {
 		t.Fatalf("只读角色写入应 403，实际 %d body=%v", resp.StatusCode, body)
 	}
 }
+
+// ===== N-032 · 客户编号自动递增 ＋ 单选校验（HTTP 级） =====
+
+// TC-N032-H1 自动编号：不传 code 连建 2 个 ⇒ 编号递增；is_outsourced=1 往返。
+func TestTC_N032_H1_AutoCodeAndOutsourced(t *testing.T) {
+	e := newM1Env(t)
+	wipeMDHTTP(t, e, "m_customer")
+	ck := e.login(m1OpenID)
+
+	resp, body := e.do("POST", "/api/md/customers", ck,
+		`{"values":{"name":"N032自动甲"}}`)
+	mustOK(t, resp, body, "自动编号创建甲")
+	row1, _ := body["row"].(map[string]interface{})
+	code1 := fmt.Sprint(row1["code"])
+
+	resp, body = e.do("POST", "/api/md/customers", ck,
+		`{"values":{"name":"N032自动乙","is_outsourced":1}}`)
+	mustOK(t, resp, body, "自动编号创建乙")
+	row2, _ := body["row"].(map[string]interface{})
+	code2 := fmt.Sprint(row2["code"])
+
+	// 编号递增连续
+	n1, n2 := 0, 0
+	fmt.Sscanf(code1, "%d", &n1)
+	fmt.Sscanf(code2, "%d", &n2)
+	if n2 != n1+1 {
+		t.Fatalf("编号应递增连续：%s → %s", code1, code2)
+	}
+
+	// is_outsourced=1 往返
+	if numOf(row2["is_outsourced"]) != 1 {
+		t.Fatalf("创建返回 is_outsourced 应为 1，实际 %v", row2["is_outsourced"])
+	}
+	id := numOf(row2["id"])
+	resp, body = e.do("GET", fmt.Sprintf("/api/md/customers/%d", id), ck, "")
+	mustOK(t, resp, body, "查详情")
+	got, _ := body["row"].(map[string]interface{})
+	if numOf(got["is_outsourced"]) != 1 {
+		t.Fatalf("详情 is_outsourced 应为 1，实际 %v", got["is_outsourced"])
+	}
+	// 列表也带该字段
+	resp, body = e.do("GET", "/api/md/customers?q=N032自动乙", ck, "")
+	mustOK(t, resp, body, "查列表")
+	rows, _ := body["rows"].([]interface{})
+	found := false
+	for _, r := range rows {
+		m, _ := r.(map[string]interface{})
+		if numOf(m["id"]) == id {
+			found = true
+			if numOf(m["is_outsourced"]) != 1 {
+				t.Fatalf("列表 is_outsourced 应为 1，实际 %v", m["is_outsourced"])
+			}
+		}
+	}
+	if !found {
+		t.Fatal("列表中应能找到该客户")
+	}
+}
+
+// TC-N032-H2 单选校验：is_internal=2 / is_outsourced="是" ⇒ 400。
+func TestTC_N032_H2_Bool01Rejected(t *testing.T) {
+	e := newM1Env(t)
+	wipeMDHTTP(t, e, "m_customer")
+	ck := e.login(m1OpenID)
+
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"is_internal=2", `{"values":{"name":"N032坏值","is_internal":2}}`},
+		{"is_internal=是", `{"values":{"name":"N032坏值","is_internal":"是"}}`},
+		{"is_outsourced=2", `{"values":{"name":"N032坏值","is_outsourced":2}}`},
+		{"is_outsourced=是", `{"values":{"name":"N032坏值","is_outsourced":"是"}}`},
+	} {
+		resp, body := e.do("POST", "/api/md/customers", ck, tc.body)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s 应 400，实际 %d body=%v", tc.name, resp.StatusCode, body)
+		}
+	}
+}
+
+// TC-N032-H3 显式编号兼容：传 code 仍可建；重复 409。
+func TestTC_N032_H3_ExplicitCode(t *testing.T) {
+	e := newM1Env(t)
+	wipeMDHTTP(t, e, "m_customer")
+	ck := e.login(m1OpenID)
+
+	resp, body := e.do("POST", "/api/md/customers", ck,
+		`{"values":{"code":"9321","name":"N032显式"}}`)
+	mustOK(t, resp, body, "显式编号创建")
+	row, _ := body["row"].(map[string]interface{})
+	if fmt.Sprint(row["code"]) != "9321" {
+		t.Fatalf("code 应为 9321，实际 %v", row["code"])
+	}
+
+	resp, body = e.do("POST", "/api/md/customers", ck,
+		`{"values":{"code":"9321","name":"N032重号"}}`)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("同 code 再建应 409，实际 %d body=%v", resp.StatusCode, body)
+	}
+}
