@@ -478,8 +478,8 @@ func TestTC_N032_01_AutoCodeIncrement(t *testing.T) {
 	})
 
 	base := n032CurrentMax(t, st)
-	if base >= 9999 {
-		t.Skipf("库内 MAX(code)=%d 已占满上限，跳过递增用例", base)
+	if base >= 9998 {
+		t.Skipf("库内 MAX(code)=%d 不足再分配 2 个自动编号，跳过递增用例", base)
 	}
 	want1 := fmt.Sprintf("%04d", base+1)
 	want2 := fmt.Sprintf("%04d", base+2)
