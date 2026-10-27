@@ -18,6 +18,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -252,11 +253,25 @@ VALUES (?, 'recv.arrive.confirm', 'ALL', 'test', 'test')`, n030OffRole); err != 
 	}
 }
 
-// TC-N030-04 无角色 ⇒ "permissions":[]（非 null）。
+// TC-N030-04 角色无任何非 NONE 授权 ⇒ "permissions":[]（非 null）。
+//
+// ★ 修正（2026-10-27，N-032 交付时发现）：原用例假设「无角色可登录」，
+//
+//	但 openSession 自 M0 起 deny-by-default（无角色 ⇒ 403），该路径不可达。
+//	改为「有角色但零非 NONE 授权」——仍钉 permissions 为 [] 非 null 的契约。
 func TestTC_N030_04_NoRoleEmptyArray(t *testing.T) {
 	st := requireDB(t)
 	n030Wipe(t, st)
 	t.Cleanup(func() { n030Wipe(t, st) })
+	ctx := context.Background()
+	// 建一个「有角色但无任何非 NONE 授权」的账号：登录可过，permissions 必为空 []
+	if _, err := st.DB().ExecContext(ctx,
+		`INSERT INTO s_role (code, name, kind, is_system, sort, status, created_by)
+		 VALUES ('tr_n030_empty', '无授权角色', 'business', 0, 990, '启用', 'test')
+		 ON DUPLICATE KEY UPDATE status='启用'`); err != nil {
+		t.Fatalf("准备空授权角色失败: %v", err)
+	}
+	bindRole(t, st, n030NoneOpenID, "tr_n030_empty")
 	e := newEnv(t, time.Hour)
 
 	ck := e.login(n030NoneOpenID)
@@ -266,7 +281,7 @@ func TestTC_N030_04_NoRoleEmptyArray(t *testing.T) {
 	}
 	got := n030Perms(t, body)
 	if len(got) != 0 {
-		t.Fatalf("★ 无角色账号 permissions 应为空数组，实际 %v", got)
+		t.Fatalf("★ 零非 NONE 授权账号 permissions 应为空数组，实际 %v", got)
 	}
 	// 原始 JSON 层面钉死 [] 非 null（map 反序列化无法区分 null 与 [] ⇒ 读原文）
 	req, err := http.NewRequest(http.MethodGet, e.srv.URL+"/api/me", nil)
@@ -286,9 +301,21 @@ func TestTC_N030_04_NoRoleEmptyArray(t *testing.T) {
 	if !strings.Contains(string(orig), `"permissions":[]`) {
 		t.Fatalf("★ 原始 JSON 应含 \"permissions\":[]（非 null），实际 %s", orig)
 	}
+	// 附带钉住：无角色登录本身仍是 403（deny-by-default 口径未松）
+	n030Wipe(t, st)
+	resp2, body2 := e.do("POST", "/api/auth/dev-login", "",
+		`{"open_id":"ou_test_n030_none"}`)
+	if resp2.StatusCode != http.StatusForbidden {
+		t.Fatalf("★ 无角色 dev 登录应 403（deny-by-default），实际 %d body=%v",
+			resp2.StatusCode, body2)
+	}
 }
 
 // TC-N030-05 形状回归 —— 既有四键原样 + permissions 为字典序 string 数组。
+//
+// ★ 修正（2026-10-27）：production 的 kind=business ⇒ 落在 roles 而非 sys_roles。
+//
+//	原断言「sys_roles 应含 production」与种子 kind 不符（生产从未是 system 角色）。
 func TestTC_N030_05_ShapeRegression(t *testing.T) {
 	st := requireDB(t)
 	n030Wipe(t, st)
@@ -306,15 +333,21 @@ func TestTC_N030_05_ShapeRegression(t *testing.T) {
 	if body["open_id"] != n030ProdOpenID {
 		t.Fatalf("open_id 应为 %q，实际 %v", n030ProdOpenID, body["open_id"])
 	}
-	sysRoles, _ := body["sys_roles"].([]interface{})
-	if len(sysRoles) == 0 {
-		t.Fatalf("★ sys_roles 应含 production（登录时聚合），实际 %v", body["sys_roles"])
-	}
-	// roles 与 sys_roles 的角色集合应一致（同源：登录时 RolesOf）
+	// production = business ⇒ roles 含 production、sys_roles 为空
 	roles, _ := body["roles"].([]interface{})
-	if len(roles) != len(sysRoles) {
-		t.Fatalf("★ roles(%d) 与 sys_roles(%d) 长度不一致（body=%v）",
-			len(roles), len(sysRoles), body)
+	found := false
+	for _, r := range roles {
+		if fmt.Sprint(r) == "production" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("★ roles 应含 production（business 角色），实际 roles=%v sys_roles=%v",
+			body["roles"], body["sys_roles"])
+	}
+	sysRoles, _ := body["sys_roles"].([]interface{})
+	if len(sysRoles) != 0 {
+		t.Fatalf("★ production 是 business 角色，sys_roles 应为空，实际 %v", body["sys_roles"])
 	}
 
 	got := n030Perms(t, body)
