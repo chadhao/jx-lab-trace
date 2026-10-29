@@ -676,6 +676,292 @@ func TestTC_N032_06_OutsourcedRoundtrip(t *testing.T) {
 // isErr 判断错误链里是否含某个哨兵错误。
 func isErr(err, target error) bool { return errors.Is(err, target) }
 
+// ===== N-033 · 四类主数据编号自动分配（物料／检测项目／原料组成／原料类型） =====
+//
+// 与 N-032 客户同构：复用 mdAllocAutoCode；差异仅在 CodeHardMax（物料 9999；其余无硬上限可进位）。
+
+// n033CurrentMax 返回指定表全版本 MAX(code) 数值；空表返回 0。
+func n033CurrentMax(t *testing.T, st *Store, table string) int64 {
+	t.Helper()
+	var max sql.NullInt64
+	if err := st.db.QueryRow("SELECT MAX(CAST(code AS UNSIGNED)) FROM `" + table + "`").Scan(&max); err != nil {
+		t.Fatalf("读取 %s MAX(code) 失败: %v", table, err)
+	}
+	if !max.Valid {
+		return 0
+	}
+	return max.Int64
+}
+
+// n033Ent 覆盖的一类主数据实体定义。
+type n033Ent struct {
+	key, table, label string
+	values            map[string]interface{}
+	explicitCode      string
+	hardCap           bool
+}
+
+// n033Entities 四类主数据（物料／检测项目／原料组成／原料类型）。
+func n033Entities() []n033Ent {
+	return []n033Ent{
+		{
+			key: "materials", table: "m_material", label: "物料",
+			values:       map[string]interface{}{"name": "N033物料", "kind": "原料"},
+			explicitCode: "9401", hardCap: true,
+		},
+		{
+			key: "test-items", table: "m_test_item", label: "检测项目",
+			values:       map[string]interface{}{"name": "N033检测项", "value_type": "数值"},
+			explicitCode: "9411", hardCap: false,
+		},
+		{
+			key: "compositions", table: "m_composition", label: "原料组成",
+			values:       map[string]interface{}{"name": "N033组成"},
+			explicitCode: "9421", hardCap: false,
+		},
+		{
+			key: "material-types", table: "m_material_type", label: "原料类型",
+			values:       map[string]interface{}{"name": "N033类型"},
+			explicitCode: "9431", hardCap: false,
+		},
+	}
+}
+
+// TC-N033-01 自动编号：四类各连建 2 条（不传 code）⇒ 与既有 MAX 衔接且递增连续。
+func TestTC_N033_01_AutoCodeIncrement(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	for _, ent := range n033Entities() {
+		t.Run(ent.key, func(t *testing.T) {
+			wipeMD(t, st, ent.table)
+			t.Cleanup(func() {
+				_, _ = st.db.ExecContext(ctx,
+					"DELETE FROM `"+ent.table+"` WHERE created_by LIKE 'ou\\_test\\_m1%'")
+			})
+
+			base := n033CurrentMax(t, st, ent.table)
+			if ent.hardCap && base >= 9998 {
+				t.Skipf("库内 MAX(code)=%d 不足再分配 2 个自动编号，跳过", base)
+			}
+			want1 := fmt.Sprintf("%04d", base+1)
+			want2 := fmt.Sprintf("%04d", base+2)
+
+			v1 := map[string]interface{}{}
+			for k, v := range ent.values {
+				v1[k] = v
+			}
+			r1, err := st.MDCreate(ctx, ent.key, v1, mdTestActor())
+			if err != nil {
+				t.Fatalf("自动编号创建失败: %v", err)
+			}
+			if r1["code"] != want1 {
+				t.Fatalf("首个自动编号应为 %s（全表 MAX+1），实际 %v", want1, r1["code"])
+			}
+
+			v2 := map[string]interface{}{}
+			for k, v := range ent.values {
+				v2[k] = v
+			}
+			v2["name"] = fmt.Sprint(ent.values["name"]) + "乙"
+			r2, err := st.MDCreate(ctx, ent.key, v2, mdTestActor())
+			if err != nil {
+				t.Fatalf("自动编号创建失败: %v", err)
+			}
+			if r2["code"] != want2 {
+				t.Fatalf("第二个自动编号应为 %s（递增连续），实际 %v", want2, r2["code"])
+			}
+		})
+	}
+}
+
+// TC-N033-02 显式编号兼容：传 code 仍可建；重复 ⇒ ErrMDDuplicate；物料非 4 位 ⇒ ErrMDBadInput。
+func TestTC_N033_02_ExplicitCodeCompatible(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	for _, ent := range n033Entities() {
+		t.Run(ent.key, func(t *testing.T) {
+			wipeMD(t, st, ent.table)
+			t.Cleanup(func() {
+				_, _ = st.db.ExecContext(ctx,
+					"DELETE FROM `"+ent.table+"` WHERE created_by LIKE 'ou\\_test\\_m1%'")
+			})
+
+			v1 := map[string]interface{}{"code": ent.explicitCode}
+			for k, v := range ent.values {
+				v1[k] = v
+			}
+			r, err := st.MDCreate(ctx, ent.key, v1, mdTestActor())
+			if err != nil {
+				t.Fatalf("显式编号创建应成功: %v", err)
+			}
+			if r["code"] != ent.explicitCode {
+				t.Fatalf("显式编号应保持原值，实际 %v", r["code"])
+			}
+
+			// 同 code 再建 ⇒ 唯一冲突
+			v2 := map[string]interface{}{"code": ent.explicitCode, "name": "重号"}
+			for k, v := range ent.values {
+				if k == "name" {
+					continue
+				}
+				v2[k] = v
+			}
+			_, err = st.MDCreate(ctx, ent.key, v2, mdTestActor())
+			if err == nil || !isErr(err, ErrMDDuplicate) {
+				t.Fatalf("同 code 再建应返回 ErrMDDuplicate，实际: %v", err)
+			}
+
+			// 物料：显式非 4 位仍 400（兼容红线）
+			if ent.hardCap {
+				v3 := map[string]interface{}{"code": "94", "name": "短编号", "kind": "原料"}
+				_, err = st.MDCreate(ctx, ent.key, v3, mdTestActor())
+				if err == nil || !isErr(err, ErrMDBadInput) {
+					t.Fatalf("非 4 位物料编号应 ErrMDBadInput，实际: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// TC-N033-03 版本链：改名产生新版本 ⇒ 沿用原编号（不重新分配）。
+func TestTC_N033_03_VersionChainKeepsCode(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	for _, ent := range n033Entities() {
+		t.Run(ent.key, func(t *testing.T) {
+			wipeMD(t, st, ent.table)
+			t.Cleanup(func() {
+				_, _ = st.db.ExecContext(ctx,
+					"DELETE FROM `"+ent.table+"` WHERE created_by LIKE 'ou\\_test\\_m1%'")
+			})
+
+			base := n033CurrentMax(t, st, ent.table)
+			if ent.hardCap && base >= 9999 {
+				t.Skipf("库内 MAX(code)=%d 已用尽，跳过", base)
+			}
+			want := fmt.Sprintf("%04d", base+1)
+
+			v1 := map[string]interface{}{}
+			for k, v := range ent.values {
+				v1[k] = v
+			}
+			r1, err := st.MDCreate(ctx, ent.key, v1, mdTestActor())
+			if err != nil {
+				t.Fatalf("创建失败: %v", err)
+			}
+			if r1["code"] != want {
+				t.Fatalf("自动编号应为 %s，实际 %v", want, r1["code"])
+			}
+
+			// 改名 ⇒ 作废+新增，新版本必须沿用原编号
+			fresh, err := st.MDUpdate(ctx, ent.key, toInt64(r1["id"]),
+				map[string]interface{}{"name": fmt.Sprint(ent.values["name"]) + "改名"},
+				"TC-N033-03 版本链沿用原编号", mdTestActor())
+			if err != nil {
+				t.Fatalf("改名应产生新版本: %v", err)
+			}
+			if fresh["code"] != want {
+				t.Fatalf("版本链新版本应沿用原编号 %s，实际 %v", want, fresh["code"])
+			}
+			if toInt64(fresh["version"]) != 2 {
+				t.Fatalf("新版本 version 应为 2，实际 %v", fresh["version"])
+			}
+		})
+	}
+}
+
+// TC-N033-04 上限：物料模拟 9999 ⇒ ErrMDCodeExhausted；检测项目/组成/类型 9999 后 ⇒ 10000（5 位，不报错）。
+func TestTC_N033_04_HardCapAndNaturalCarry(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	for _, ent := range n033Entities() {
+		t.Run(ent.key, func(t *testing.T) {
+			wipeMD(t, st, ent.table)
+			t.Cleanup(func() {
+				_, _ = st.db.ExecContext(ctx,
+					"DELETE FROM `"+ent.table+"` WHERE created_by LIKE 'ou\\_test\\_m1%'")
+			})
+
+			// 预置 9999（业务数据可能已达则跳过插入）
+			if n033CurrentMax(t, st, ent.table) < 9999 {
+				kindSQL := ""
+				kindVal := ""
+				if ent.key == "materials" {
+					kindSQL = ", kind"
+					kindVal = ", '原料'"
+				}
+				q := "INSERT INTO `" + ent.table + "` (code, name, status, version, is_current, created_by" +
+					kindSQL + ") VALUES ('9999', 'N033上限', '启用', 1, 1, 'ou_test_m1_qc'" + kindVal + ")"
+				if _, err := st.db.ExecContext(ctx, q); err != nil {
+					t.Fatalf("预置 9999 失败: %v", err)
+				}
+			}
+
+			v := map[string]interface{}{}
+			for k, val := range ent.values {
+				v[k] = val
+			}
+			r, err := st.MDCreate(ctx, ent.key, v, mdTestActor())
+			if ent.hardCap {
+				if err == nil || !isErr(err, ErrMDCodeExhausted) {
+					t.Fatalf("物料编号用尽应 ErrMDCodeExhausted，实际: %v", err)
+				}
+				return
+			}
+			// 无硬上限：自然进位为 10000（5 位）
+			if err != nil {
+				t.Fatalf("9999 后仍应可自动分配，实际: %v", err)
+			}
+			if r["code"] != "10000" {
+				t.Fatalf("9999 后应进位为 10000，实际 %v", r["code"])
+			}
+		})
+	}
+}
+
+// TC-N033-05 首号口径：整表为空时自动编号应从 0001 开始；非空则断言 = MAX+1（★ 不 TRUNCATE 种子行）。
+func TestTC_N033_05_FirstNumber(t *testing.T) {
+	st := migrateForTest(t)
+	ctx := context.Background()
+	for _, ent := range n033Entities() {
+		t.Run(ent.key, func(t *testing.T) {
+			wipeMD(t, st, ent.table)
+			t.Cleanup(func() {
+				_, _ = st.db.ExecContext(ctx,
+					"DELETE FROM `"+ent.table+"` WHERE created_by LIKE 'ou\\_test\\_m1%'")
+			})
+
+			base := n033CurrentMax(t, st, ent.table)
+			if ent.hardCap && base >= 9999 {
+				t.Skipf("库内 MAX(code)=%d 已用尽，跳过", base)
+			}
+			want := fmt.Sprintf("%04d", base+1)
+
+			var total int
+			if err := st.db.QueryRow("SELECT COUNT(*) FROM `" + ent.table + "`").Scan(&total); err != nil {
+				t.Fatalf("统计失败: %v", err)
+			}
+			v := map[string]interface{}{}
+			for k, val := range ent.values {
+				v[k] = val
+			}
+			r, err := st.MDCreate(ctx, ent.key, v, mdTestActor())
+			if err != nil {
+				t.Fatalf("创建失败: %v", err)
+			}
+			if total == 0 {
+				if r["code"] != "0001" {
+					t.Fatalf("空表首号应为 0001，实际 %v", r["code"])
+				}
+				return
+			}
+			if r["code"] != want {
+				t.Fatalf("非空表首号应为 %s（MAX+1），实际 %v", want, r["code"])
+			}
+		})
+	}
+}
+
 // TC-N032-05b 纯单测：validateBool01 三象限（不连库）。
 func TestTC_N032_05b_ValidateBool01_Unit(t *testing.T) {
 	ok := func(v interface{}) {

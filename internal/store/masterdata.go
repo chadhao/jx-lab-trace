@@ -51,7 +51,8 @@ var (
 	ErrMDBadInput       = errors.New("输入不合法")
 	ErrMDNeedReason     = errors.New("更正业务字段必须填写原因")
 	ErrMDNoChange       = errors.New("内容未变化")
-	ErrMDCodeExhausted  = errors.New("客户编号已用尽")
+	// ★ N-033：哨兵文案保持含「已用尽」（HTTP 测试按此匹配）；实体前缀由调用方包装。
+	ErrMDCodeExhausted = errors.New("编号已用尽")
 )
 
 // MDEntity 描述一张主数据表的可写面与语义。
@@ -66,7 +67,11 @@ type MDEntity struct {
 	Writable  []string        // 可写业务列白名单（其余列一律拒绝写入）
 	Required  []string        // 必填列
 	NameCol   string          // 可模糊检索的名称列（空 = 该表无名称列）
-	Validate  func(values map[string]interface{}) error
+	// ★ N-032/N-033：AutoCode=true 时创建路径 code 可缺省，系统自动分配「全版本 MAX+1」。
+	//	CodeHardMax>0 表示硬上限（用尽 ⇒ ErrMDCodeExhausted）；0 = 无硬上限（VARCHAR 自然进位 5 位）。
+	AutoCode    bool
+	CodeHardMax int64
+	Validate    func(values map[string]interface{}) error
 }
 
 var digits4 = regexp.MustCompile(`^[0-9]{4}$`)
@@ -156,6 +161,7 @@ var mdEntities = []MDEntity{
 		NameCol:  "name",
 		// ★ N-032：code 创建时可缺省（系统自动分配 MAX+1）；显式传入仍须 4 位数字。
 		// ★ is_internal / is_outsourced 仅接受 0/1（防脏数据从 API 直入）。
+		AutoCode: true, CodeHardMax: 9999,
 		Validate: func(values map[string]interface{}) error {
 			if err := requireStr(values, "name"); err != nil {
 				return err
@@ -175,10 +181,12 @@ var mdEntities = []MDEntity{
 		Perm: permission.MdMaterial, Versioned: true, HasValid: true,
 		BizKey:   []string{"code"},
 		Writable: []string{"code", "name", "external_id"},
-		Required: []string{"code", "name"},
+		Required: []string{"name"},
 		NameCol:  "name",
+		// ★ N-033：code 可缺省自动分配（VARCHAR(16)，超 9999 自然进位）；显式传入不收紧格式。
+		AutoCode: true,
 		Validate: func(values map[string]interface{}) error {
-			return requireStr(values, "code", "name")
+			return requireStr(values, "name")
 		},
 	},
 	{
@@ -186,10 +194,12 @@ var mdEntities = []MDEntity{
 		Perm: permission.MdMaterial, Versioned: true, HasValid: true,
 		BizKey:   []string{"code"},
 		Writable: []string{"code", "name", "external_id"},
-		Required: []string{"code", "name"},
+		Required: []string{"name"},
 		NameCol:  "name",
+		// ★ N-033：code 可缺省自动分配（VARCHAR(16)，超 9999 自然进位）；显式传入不收紧格式。
+		AutoCode: true,
 		Validate: func(values map[string]interface{}) error {
-			return requireStr(values, "code", "name")
+			return requireStr(values, "name")
 		},
 	},
 	{
@@ -197,13 +207,17 @@ var mdEntities = []MDEntity{
 		Perm: permission.MdMaterial, Versioned: true, HasValid: true,
 		BizKey:   []string{"code"},
 		Writable: []string{"code", "name", "composition_id", "material_type_id", "kind", "spec", "unit", "external_id"},
-		Required: []string{"code", "name", "kind"},
+		Required: []string{"name", "kind"},
 		NameCol:  "name",
+		// ★ N-033：code 可缺省自动分配；CHAR(4) 硬上限 9999；显式传入仍须 4 位数字（兼容红线）。
+		// 物料编号嵌进 27 位追踪码 ⇒ 分配后不可变（版本链沿用原编号）。
+		AutoCode: true, CodeHardMax: 9999,
 		Validate: func(values map[string]interface{}) error {
-			if err := requireStr(values, "code", "name", "kind"); err != nil {
+			if err := requireStr(values, "name", "kind"); err != nil {
 				return err
 			}
-			if !digits4.MatchString(strings.TrimSpace(strVal(values["code"]))) {
+			code := strings.TrimSpace(strVal(values["code"]))
+			if code != "" && !digits4.MatchString(code) {
 				return fmt.Errorf("%w：物料编号必须是 4 位数字", ErrMDBadInput)
 			}
 			return oneOf(values, "kind", "原料", "成品")
@@ -214,10 +228,13 @@ var mdEntities = []MDEntity{
 		Perm: permission.MdTestItem, Versioned: true, HasValid: true,
 		BizKey:   []string{"code"},
 		Writable: []string{"code", "name", "unit", "method", "value_type", "decimals", "enum_values", "sort", "external_id"},
-		Required: []string{"code", "name", "value_type"},
+		Required: []string{"name", "value_type"},
 		NameCol:  "name",
+		// ★ N-033：code 可缺省自动分配（VARCHAR(32)，超 9999 自然进位，纯数字无前缀）；
+		// 显式传入不收紧格式（自由编码仍接受，兼容既有导入）。
+		AutoCode: true,
 		Validate: func(values map[string]interface{}) error {
-			if err := requireStr(values, "code", "name", "value_type"); err != nil {
+			if err := requireStr(values, "name", "value_type"); err != nil {
 				return err
 			}
 			if err := oneOf(values, "value_type", "数值", "文本", "枚举"); err != nil {
@@ -486,11 +503,11 @@ func (s *Store) MDHistory(ctx context.Context, key string, id int64) ([]MDRow, e
 
 // MDCreate 新增一条主数据（version=1、is_current=1）。
 //
-// ★ N-032：客户（customers）创建时 code 可缺省/空 ⇒ 系统自动分配「全表所有版本 MAX(code)+1」
+// ★ N-032/N-033：AutoCode 实体创建时 code 可缺省/空 ⇒ 系统自动分配「全表所有版本 MAX(code)+1」
 //
 //	左补零 4 位（首号 0001）；分配在事务内加锁（FOR UPDATE），撞号重试一次；
-//	上限 9999 用尽 ⇒ ErrMDCodeExhausted（HTTP 409）。
-//	★ 兼容红线：显式传 code 时保持现行为（4 位数字校验＋唯一性）。
+//	CodeHardMax>0 时上限用尽 ⇒ ErrMDCodeExhausted（HTTP 409）；无上限者 VARCHAR 自然进位。
+//	★ 兼容红线：显式传 code 时保持现行为（物料/客户 4 位校验；检测项目/组成/类型不收紧格式）。
 func (s *Store) MDCreate(ctx context.Context, key string, values map[string]interface{}, actor MDActor) (MDRow, error) {
 	e, err := mdEntityForWrite(key)
 	if err != nil {
@@ -503,7 +520,7 @@ func (s *Store) MDCreate(ctx context.Context, key string, values map[string]inte
 	if err := e.Validate(allValues(e, fields, nil)); err != nil {
 		return MDRow{}, err
 	}
-	autoCode := e.Key == "customers" && strings.TrimSpace(strVal(fields["code"])) == ""
+	autoCode := e.AutoCode && strings.TrimSpace(strVal(fields["code"])) == ""
 
 	// 撞号重试一次（仅自动编号路径）
 	for attempt := 0; ; attempt++ {
@@ -526,8 +543,12 @@ func (s *Store) mdCreateOnce(ctx context.Context, e MDEntity, fields map[string]
 	defer tx.Rollback()
 
 	if autoCode {
-		code, err := mdAllocCustomerCode(ctx, tx)
+		code, err := mdAllocAutoCode(ctx, tx, e.Table, e.CodeHardMax)
 		if err != nil {
+			if errors.Is(err, ErrMDCodeExhausted) {
+				// 文案如「客户编号已用尽」/「物料编号已用尽」；errors.Is 仍命中哨兵。
+				return nil, fmt.Errorf("%s%w", e.Label, ErrMDCodeExhausted)
+			}
 			return nil, err
 		}
 		fields["code"] = code
@@ -596,10 +617,10 @@ func (s *Store) MDUpdate(ctx context.Context, key string, id int64, values map[s
 	if err != nil {
 		return nil, err
 	}
-	// ★ N-032：更新路径不得把 code 清空（自动分配只在创建时发生）。
-	if e.Key == "customers" {
+	// ★ N-032/N-033：更新路径不得把 code 清空（自动分配只在创建时发生）。
+	if e.AutoCode {
 		if v, ok := fields["code"]; ok && strings.TrimSpace(strVal(v)) == "" {
-			return nil, fmt.Errorf("%w：客户编号不能为空", ErrMDBadInput)
+			return nil, fmt.Errorf("%w：%s编号不能为空", ErrMDBadInput, e.Label)
 		}
 	}
 
@@ -922,21 +943,23 @@ func mdSelectForUpdate(ctx context.Context, tx *sql.Tx, e MDEntity, id int64) (M
 	return list[0], nil
 }
 
-// mdAllocCustomerCode 在事务内分配下一个客户编号：
+// mdAllocAutoCode 在事务内分配下一个自动编号：
 // 取全表所有版本 MAX(CAST(code AS UNSIGNED))+1，左补零 4 位（首号 0001）。
-// ★ FOR UPDATE 锁住参与扫描的行 ⇒ 并发分配串行化；上限 9999 用尽 ⇒ ErrMDCodeExhausted。
-func mdAllocCustomerCode(ctx context.Context, tx *sql.Tx) (string, error) {
+// ★ FOR UPDATE 锁住参与扫描的行 ⇒ 并发分配串行化；
+// hardMax>0 时上限用尽 ⇒ ErrMDCodeExhausted；hardMax=0 时无硬上限（VARCHAR 自然进位）。
+// ★ 非数字 code（如历史 T 前缀）CAST 得 0，不影响纯数字序列。
+func mdAllocAutoCode(ctx context.Context, tx *sql.Tx, table string, hardMax int64) (string, error) {
 	var maxCode sql.NullInt64
 	err := tx.QueryRowContext(ctx,
-		`SELECT MAX(CAST(code AS UNSIGNED)) FROM m_customer FOR UPDATE`).Scan(&maxCode)
+		"SELECT MAX(CAST(`code` AS UNSIGNED)) FROM `"+table+"` FOR UPDATE").Scan(&maxCode)
 	if err != nil {
-		return "", fmt.Errorf("读取客户编号最大值失败: %w", err)
+		return "", fmt.Errorf("读取编号最大值失败: %w", err)
 	}
 	next := int64(1)
 	if maxCode.Valid {
 		next = maxCode.Int64 + 1
 	}
-	if next > 9999 {
+	if hardMax > 0 && next > hardMax {
 		return "", ErrMDCodeExhausted
 	}
 	return fmt.Sprintf("%04d", next), nil

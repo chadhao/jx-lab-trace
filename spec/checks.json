@@ -226,8 +226,8 @@
       "id": "N032-02",
       "kind": "source_regex",
       "file": "internal/store/masterdata.go",
-      "pattern": "mdAllocCustomerCode",
-      "desc": "客户编号自动分配实现存在（MAX+1 左补零，事务内加锁）"
+      "pattern": "mdAllocAutoCode",
+      "desc": "客户编号自动分配实现存在（MAX+1 左补零，事务内加锁；N-033 抽公用后函数名）"
     },
     {
       "id": "N032-03",
@@ -242,6 +242,20 @@
       "file": "internal/store/masterdata.go",
       "pattern": "validateBool01",
       "desc": "is_internal/is_outsourced 后端校验仅 0/1"
+    },
+    {
+      "id": "N033-01",
+      "kind": "source_regex",
+      "file": "internal/store/masterdata.go",
+      "pattern": "CodeHardMax: 9999",
+      "desc": "物料/客户自动编号硬上限 9999（CHAR(4) 用尽 409）"
+    },
+    {
+      "id": "N033-02",
+      "kind": "source_regex",
+      "file": "internal/store/masterdata.go",
+      "pattern": "AutoCode: true",
+      "desc": "主数据自动编号抽公用开关（客户/物料/检测项目/组成/类型）"
     }
   ]
 }
