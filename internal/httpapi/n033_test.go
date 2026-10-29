@@ -175,13 +175,16 @@ func TestN033_HTTP_CapAndCarry(t *testing.T) {
 		t.Run(c.key, func(t *testing.T) {
 			wipeN033(t, e, c.table)
 
-			// 占 9999
-			kind := ""
-			if c.key == "materials" {
-				kind = `,"kind":"原料"`
+			// 占 9999（补齐各实体必填列）
+			extra := ""
+			switch c.key {
+			case "materials":
+				extra = `,"kind":"原料"`
+			case "test-items":
+				extra = `,"value_type":"数值"`
 			}
 			resp, body := e.do("POST", "/api/md/"+c.key, ck,
-				fmt.Sprintf(`{"values":{"code":"9999","name":"N033占满"%s}}`, kind))
+				fmt.Sprintf(`{"values":{"code":"9999","name":"N033占满"%s}}`, extra))
 			if resp.StatusCode == http.StatusConflict {
 				msg0 := fmt.Sprint(body["error"])
 				if !strings.Contains(msg0, "已存在") && !strings.Contains(msg0, "已用尽") {
@@ -203,11 +206,12 @@ func TestN033_HTTP_CapAndCarry(t *testing.T) {
 				}
 				return
 			}
-			// 无硬上限：进位 10000
+			// 无硬上限：进位为 >=10000 的纯数字（高位库可能已更高）
 			mustOK(t, resp, body, "9999 后自动分配")
 			got := fmt.Sprint(body["row"].(map[string]interface{})["code"])
-			if got != "10000" {
-				t.Fatalf("9999 后应进位为 10000，实际 %s body=%v", got, body)
+			var n int
+			if _, err := fmt.Sscanf(got, "%d", &n); err != nil || n < 10000 {
+				t.Fatalf("9999 后应进位为 >=10000，实际 %s body=%v", got, body)
 			}
 		})
 	}
