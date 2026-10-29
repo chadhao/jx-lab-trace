@@ -10,8 +10,8 @@ const ENTITIES = [
   {
     key: 'customers', name: '客户', perm: 'md.customer',
     fields: [
-      // ★ N-032：创建时只读（保存后由系统自动分配）；修改时保持可编辑（兼容显式 code）
-      { k: 'code', l: '客户编号', req: true, readonlyCreate: true, ph: '保存后自动分配' },
+      // ★ N-034：编号对人无业务含义，新建/编辑表单整体不渲染；后端照旧自动分配；列表/详情/历史仍展示
+      { k: 'code', l: '客户编号', req: true, hidden: true },
       { k: 'name', l: '名称', req: true },
       { k: 'short_name', l: '简称' },
       { k: 'contact', l: '联系人' },
@@ -24,8 +24,8 @@ const ENTITIES = [
   {
     key: 'compositions', name: '原料组成', perm: 'md.material',
     fields: [
-      // ★ N-033：创建时只读（保存后系统自动分配）；修改时可编辑（兼容显式 code）
-      { k: 'code', l: '编码', req: true, readonlyCreate: true, ph: '保存后自动分配' },
+      // ★ N-034：编号不渲染（后端自动分配）；列表/详情/历史仍展示
+      { k: 'code', l: '编码', req: true, hidden: true },
       { k: 'name', l: '名称', req: true },
     ],
     cols: ['code', 'name', 'status', 'version'],
@@ -33,7 +33,7 @@ const ENTITIES = [
   {
     key: 'material-types', name: '原料类型', perm: 'md.material',
     fields: [
-      { k: 'code', l: '编码', req: true, readonlyCreate: true, ph: '保存后自动分配' },
+      { k: 'code', l: '编码', req: true, hidden: true },
       { k: 'name', l: '名称', req: true },
     ],
     cols: ['code', 'name', 'status', 'version'],
@@ -41,8 +41,8 @@ const ENTITIES = [
   {
     key: 'materials', name: '物料', perm: 'md.material',
     fields: [
-      // ★ N-033：创建时只读（保存后系统自动分配，4 位、不可变、嵌进追踪码）
-      { k: 'code', l: '物料编号', req: true, readonlyCreate: true, ph: '保存后自动分配' },
+      // ★ N-034：编号不渲染（后端自动分配，4 位、不可变、嵌进追踪码）；列表/详情/历史仍展示
+      { k: 'code', l: '物料编号', req: true, hidden: true },
       { k: 'name', l: '名称', req: true },
       { k: 'kind', l: '原料/成品', req: true, opts: ['原料', '成品'] },
       { k: 'composition_id', l: '组成ID', t: 'int' },
@@ -55,7 +55,7 @@ const ENTITIES = [
   {
     key: 'test-items', name: '检测项目', perm: 'md.test_item',
     fields: [
-      { k: 'code', l: '编码', req: true, readonlyCreate: true, ph: '保存后自动分配' },
+      { k: 'code', l: '编码', req: true, hidden: true },
       { k: 'name', l: '名称', req: true },
       { k: 'unit', l: '单位' },
       { k: 'method', l: '检测方法/标准号' },
@@ -123,6 +123,9 @@ const canWrite = computed(() => {
   return true
 })
 
+// ★ N-034：表单只渲染非 hidden 字段（如五类自动分配的编号）；列表/历史仍用完整 cur.fields/cols
+const formFields = computed(() => (cur.value.fields || []).filter(f => !f.hidden))
+
 async function load() {
   loading.value = true
   err.value = ''
@@ -179,8 +182,8 @@ async function submit() {
   formErr.value = ''
   const values = {}
   for (const f of cur.value.fields) {
-    // 创建时只读字段（如客户编号自动分配）不提交
-    if (!editing.value && f.readonlyCreate) continue
+    // ★ N-034：hidden 字段（编号）创建时不提交（后端自动分配）；修改时仍带原值（后端要求 AutoCode 更新必带 code）
+    if (!editing.value && f.hidden) continue
     if (f.req && (form.value[f.k] === '' || form.value[f.k] === null || form.value[f.k] === undefined)) {
       formErr.value = `「${f.l}」必填`
       return
@@ -332,16 +335,14 @@ onMounted(load)
         <button class="ghost" @click="showForm = false">取消</button>
       </div>
       <div class="form">
-        <label v-for="f in cur.fields" :key="f.k">
-          <span>{{ f.l }}<em v-if="f.req && !f.readonlyCreate">*</em></span>
+        <label v-for="f in formFields" :key="f.k">
+          <span>{{ f.l }}<em v-if="f.req">*</em></span>
           <select v-if="f.opts" v-model="form[f.k]">
             <option v-for="o in f.opts" :key="typeof o === 'object' ? o.v : o"
                     :value="typeof o === 'object' ? o.v : o">
               {{ typeof o === 'object' ? o.l : o }}
             </option>
           </select>
-          <input v-else-if="f.readonlyCreate && !editing" :value="form[f.k] || ''"
-                 :placeholder="f.ph || f.l" readonly />
           <input v-else v-model="form[f.k]" :placeholder="f.ph || f.l" />
           <small v-if="f.hint" class="field-hint">{{ f.hint }}</small>
         </label>

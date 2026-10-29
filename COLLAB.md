@@ -2576,8 +2576,40 @@
 - **我方立场**：范围＝任务包 **`MIMO-NEXT-FIX-18.md`**：五张表单（客户/物料/检测项目/原料组成/原料类型）**不渲染编号字段**（非只读、非占位）；**保存成功提示保留编号**；**列表与详情保留编号列**（定位用）；若为通用表单组件则用字段可见性配置驱动（不写五处特判）。★ 纯前端，不改后端/schema。
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：仅前端表单渲染；不改数据模型。
-- **状态**：OPEN
-- **最后更新**：2026-10-29 15:10
+- **状态**：MIMO-DONE
+- **最后更新**：2026-10-29 15:23
+
+#### mimo 回执（2026-10-29）
+
+**D1–D2 · 前端：字段可见性配置驱动（无五处特判）**
+
+- ★ 通用主数据表单组件 `web/src/components/MasterData.vue` 为**字段配置驱动** ⇒ 新增 `hidden: true` 字段标志；五张表单（customers/materials/test-items/compositions/material-types）的 `code` 字段各打一个标志（**零 if 特判**）。
+- ★ 渲染层：`formFields = computed(() => cur.value.fields.filter(f => !f.hidden))`，新建/编辑表单 `v-for` 只走 `formFields` ⇒ 编号输入框/只读控件/占位文案**整体不出现**。
+- ★ 提交层：创建路径 `if (!editing.value && f.hidden) continue`（不提交编号，后端照旧自动分配）；修改路径仍带原 `form.code`（openEdit 从行预填，后端 AutoCode 更新必带 code 的契约不变）。
+- ★ 既有校验逻辑一字未动（班组 `teams.code` 仍可编辑；判定限/车辆无 code 字段）；`readonlyCreate`/`ph:保存后自动分配` 已随隐藏一并移除（不再被任何路径引用）。
+- ★ **保存成功提示保留编号**：`新增成功，{实体名}编号：XXXX` 不变（页面实测「新增成功，客户编号：0001」）。
+- ★ **列表/详情/历史保留编号列**：`cols` 与历史面板仍走完整 `cur.fields`，未隐藏。
+
+**D3 · 测试**
+
+1. **DOM 断言**（测试服务器 Playwright 逐张表单快照）：五张新建表单 + 客户编辑表单均**不存在**编号 textbox/只读控件（客户表单仅 名称/简称/联系人/电话/集团内/委外单位；组成与类型仅 名称；物料无「物料编号」；检测项目无「编码」）。
+2. **创建流程回归**：客户新建只填名称 ⇒ 保存成功，提示含实际编号 `0001`，列表行 `code=0001`。
+3. 列表表头 `code` 列五张表均**仍在**（截图+快照核对）。
+4. 门禁既有测试全绿；`bash scripts/build.sh` 重建 dist 并重嵌 `internal/webui/dist`。
+
+**D4 · 交付**
+
+- ★ **门禁 11/11 全绿**（`bash scripts/check_all.sh`；Windows：`PY=python` + `PATH` 含 `C:\go\bin` + `GOCACHE`）。
+- ★ **部署测试服务器**（`deploy-test-server.sh --restart --smoke`）：旧进程 PID 734564 停止、新 PID **736114** 启动；`/healthz` 200（`version=914ef59-dirty`——dist 未入库前的 dirty 属预期，提交后对齐）；`.env.deploy` 前后 md5 一致 `abe7a05db108485e8dccfa3a90558a9d`。
+- ★ **页面实测**（`http://192.168.10.50:18080`，dev 登录 ou_dev_admin）：五张表单 DOM 快照 + 截图核对**无编号字段**；创建提示与列表 code 列正常。
+- ★ 纯前端：不改后端自动编号逻辑、不改 schema、不取消 code 列。
+- ★ 只本地提交不 push。
+
+**口径声明（§6）**
+
+1. **纯前端**：后端 `mdAllocAutoCode`/schema/code 列**一字未动**。
+2. 显式 code API 兼容（N-032/N-033 红线）不受影响——隐藏只是 UI 不渲染，修改时前端仍带原值提交。
+3. 只本地提交不 push；其余同 FIX-02 §6。
 
 ## 5. 已决议
 
