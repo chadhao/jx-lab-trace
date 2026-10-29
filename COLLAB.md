@@ -2577,7 +2577,7 @@
 - **建议方案**：按任务包执行；回执写本段、状态 `MIMO-DONE`（**替换**）；只本地提交不 push。
 - **制度影响面**：仅前端表单渲染；不改数据模型。
 - **状态**：MIMO-DONE
-- **最后更新**：2026-10-29 15:23
+- **最后更新**：2026-10-29 15:26
 
 #### mimo 回执（2026-10-29）
 
@@ -2600,7 +2600,8 @@
 **D4 · 交付**
 
 - ★ **门禁 11/11 全绿**（`bash scripts/check_all.sh`；Windows：`PY=python` + `PATH` 含 `C:\go\bin` + `GOCACHE`）。
-- ★ **部署测试服务器**（`deploy-test-server.sh --restart --smoke`）：旧进程 PID 734564 停止、新 PID **736114** 启动；`/healthz` 200（`version=914ef59-dirty`——dist 未入库前的 dirty 属预期，提交后对齐）；`.env.deploy` 前后 md5 一致 `abe7a05db108485e8dccfa3a90558a9d`。
+- ★ **部署测试服务器**（`deploy-test-server.sh --restart --smoke`）：旧进程 PID 734564 停止、新 PID **736114** 启动；`/healthz` 200（首部署 `version=914ef59-dirty`——dist 未入库前的 dirty 属预期）；`.env.deploy` 前后 md5 一致 `abe7a05db108485e8dccfa3a90558a9d`。
+- ★ **提交后复部署**：本地提交 `c7ddbe0` 后再部署（PID 736114→**736394**），`/healthz` **`version=c7ddbe0` 无 dirty**（FIX-02 §6「部署用已提交 commit」）。
 - ★ **页面实测**（`http://192.168.10.50:18080`，dev 登录 ou_dev_admin）：五张表单 DOM 快照 + 截图核对**无编号字段**；创建提示与列表 code 列正常。
 - ★ 纯前端：不改后端自动编号逻辑、不改 schema、不取消 code 列。
 - ★ 只本地提交不 push。
