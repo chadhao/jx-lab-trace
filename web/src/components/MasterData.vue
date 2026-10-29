@@ -23,18 +23,26 @@ const ENTITIES = [
   },
   {
     key: 'compositions', name: '原料组成', perm: 'md.material',
-    fields: [{ k: 'code', l: '编码', req: true }, { k: 'name', l: '名称', req: true }],
+    fields: [
+      // ★ N-033：创建时只读（保存后系统自动分配）；修改时可编辑（兼容显式 code）
+      { k: 'code', l: '编码', req: true, readonlyCreate: true, ph: '保存后自动分配' },
+      { k: 'name', l: '名称', req: true },
+    ],
     cols: ['code', 'name', 'status', 'version'],
   },
   {
     key: 'material-types', name: '原料类型', perm: 'md.material',
-    fields: [{ k: 'code', l: '编码', req: true }, { k: 'name', l: '名称', req: true }],
+    fields: [
+      { k: 'code', l: '编码', req: true, readonlyCreate: true, ph: '保存后自动分配' },
+      { k: 'name', l: '名称', req: true },
+    ],
     cols: ['code', 'name', 'status', 'version'],
   },
   {
     key: 'materials', name: '物料', perm: 'md.material',
     fields: [
-      { k: 'code', l: '物料编号(4位)', req: true },
+      // ★ N-033：创建时只读（保存后系统自动分配，4 位、不可变、嵌进追踪码）
+      { k: 'code', l: '物料编号', req: true, readonlyCreate: true, ph: '保存后自动分配' },
       { k: 'name', l: '名称', req: true },
       { k: 'kind', l: '原料/成品', req: true, opts: ['原料', '成品'] },
       { k: 'composition_id', l: '组成ID', t: 'int' },
@@ -47,7 +55,7 @@ const ENTITIES = [
   {
     key: 'test-items', name: '检测项目', perm: 'md.test_item',
     fields: [
-      { k: 'code', l: '编码', req: true },
+      { k: 'code', l: '编码', req: true, readonlyCreate: true, ph: '保存后自动分配' },
       { k: 'name', l: '名称', req: true },
       { k: 'unit', l: '单位' },
       { k: 'method', l: '检测方法/标准号' },
@@ -189,7 +197,7 @@ async function submit() {
     } else {
       const res = await api.post(`/api/md/${cur.value.key}`, { values })
       const assigned = res && res.row && res.row.code
-      msg.value = assigned ? `新增成功，客户编号：${assigned}` : '新增成功'
+      msg.value = assigned ? `新增成功，${cur.value.name}编号：${assigned}` : '新增成功'
     }
     showForm.value = false
     await load()
